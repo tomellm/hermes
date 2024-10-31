@@ -1,39 +1,43 @@
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+use std::{
+    fmt::Display,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
+
+use tracing::error;
 
 use diesel::{
     backend::Backend,
     debug_query,
-    query_builder::{self, AsQuery, IntoBoxedClause, Query, QueryFragment, QueryId},
+    query_builder::QueryFragment,
     query_dsl::methods::{ExecuteDsl, LoadQuery},
+    r2d2::{ManageConnection, Pool},
     Connection, QueryResult, RunQueryDsl,
 };
 use tokio::{
     sync::{
         mpsc,
         oneshot::{self, error::TryRecvError},
-        Mutex,
     },
     task,
 };
-use tracing::error;
 
 use crate::messenger::ContainerData;
 
 pub struct Container<Value, Database>
 where
-    Database: Connection + 'static,
+    Database: ManageConnection + 'static,
     Value: Send + 'static,
 {
-    pool: Arc<Mutex<Database>>,
+    pool: Pool<Database>,
     all_tables: Vec<String>,
     interesting_tables: Vec<String>,
     values: Vec<Value>,
-    executing_query: Option<ExecutingQuery<Value>>,
+    executing_query: Option<oneshot::Receiver<ExecutingQuery<Value>>>,
     tables_interested_sender: mpsc::Sender<Vec<String>>,
-    executing_executes: Vec<ExecutingExecute>,
+    executing_executes: Vec<oneshot::Receiver<ExecutingExecute>>,
     tables_changed_sender: mpsc::Sender<Vec<String>>,
     should_update: Arc<AtomicBool>,
     new_register_sender: mpsc::Sender<ContainerData>,
@@ -41,11 +45,14 @@ where
 
 impl<Value, Database> Container<Value, Database>
 where
-    Database: Connection + 'static,
+    Database: ManageConnection + 'static,
+    Database::Connection: Connection,
+    <Database::Connection as Connection>::Backend: Default,
+    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
     Value: Send + 'static,
 {
     pub fn new(
-        pool: Arc<Mutex<Database>>,
+        pool: Pool<Database>,
         all_tables: Vec<String>,
         tables_interested_sender: mpsc::Sender<Vec<String>>,
         tables_changed_sender: mpsc::Sender<Vec<String>>,
@@ -65,6 +72,52 @@ where
             new_register_sender,
         }
     }
+
+    pub fn state_update(&mut self) {
+        let executing_query = self.executing_query.take();
+        if let Some(mut executing_query) = executing_query {
+            match executing_query.try_recv() {
+                Ok(ExecutingQuery {
+                    interested_tables,
+                    values: Ok(values),
+                }) => {
+                    self.interesting_tables = interested_tables.clone();
+                    let sender = self.tables_interested_sender.clone();
+                    task::spawn(async move {
+                        let _ = sender.send(interested_tables).await;
+                    });
+                    self.values = values;
+                }
+                Ok(ExecutingQuery {
+                    values: Err(error), ..
+                }) => {
+                    error!("{error}");
+                }
+                Err(TryRecvError::Closed) => (),
+                Err(TryRecvError::Empty) => {
+                    let _ = self.executing_query.insert(executing_query);
+                }
+            }
+        }
+
+        self.executing_executes
+            .retain_mut(|execute| match execute.try_recv() {
+                Ok(ExecutingExecute { affected_tables, result: Ok(_) }) => {
+                    let tables = affected_tables.clone();
+                    let sender = self.tables_changed_sender.clone();
+                    task::spawn(async move {
+                        let _ = sender.send(tables).await;
+                    });
+                    false
+                }
+                Ok(ExecutingExecute { result: Err(error), .. }) => {
+                    error!("{error}");
+                    false
+                }
+                Err(TryRecvError::Closed) => false,
+                Err(TryRecvError::Empty) => true,
+            });
+    }
     pub async fn register_new(&self) -> Self {
         let (tables_interested_sender, tables_interested_reciever) = mpsc::channel(3);
         let should_update = Arc::new(AtomicBool::new(false));
@@ -81,119 +134,62 @@ where
             tables_interested_sender,
             self.tables_changed_sender.clone(),
             should_update,
-            self.new_register_sender.clone()
+            self.new_register_sender.clone(),
         )
     }
     pub fn should_refresh(&self) -> bool {
         self.should_update.load(Ordering::Relaxed)
     }
-    pub fn state_update(&mut self) {
-        let executing_query = self.executing_query.take();
-        if let Some(mut executing_query) = executing_query {
-            match executing_query.reciever.try_recv() {
-                Ok(Ok(values)) => {
-                    let tables = executing_query.interested_tables;
-                    self.interesting_tables = tables.clone();
-                    let sender = self.tables_interested_sender.clone();
-                    task::spawn(async move {
-                        let _ = sender.send(tables).await;
-                    });
-                    self.values = values;
-                }
-                Ok(Err(error)) => {
-                    error!("{error}");
-                }
-                Err(TryRecvError::Closed) => (),
-                Err(TryRecvError::Empty) => {
-                    let _ = self.executing_query.insert(executing_query);
-                }
-            }
-        }
-
-        self.executing_executes
-            .retain_mut(|execute| match execute.reciever.try_recv() {
-                Ok(Ok(_)) => {
-                    let tables = execute.affected_tables.clone();
-                    let sender = self.tables_changed_sender.clone();
-                    task::spawn(async move {
-                        let _ = sender.send(tables).await;
-                    });
-                    false
-                }
-                Ok(Err(error)) => {
-                    error!("{error}");
-                    false
-                }
-                Err(TryRecvError::Closed) => false,
-                Err(TryRecvError::Empty) => true,
-            });
-    }
-    pub fn query<Query>(&mut self, query: Query)
+    pub fn query<Query>(&mut self, query_fn: impl FnOnce() -> Query + Send + 'static)
     where
-        for<'query> Query: IntoBoxedClause<'query, Database::Backend>
-            + LoadQuery<'query, Database, Value>
-            + QueryFragment<<Database as Connection>::Backend>
-            + 'static,
-        for<'query> <Query as IntoBoxedClause<'query, Database::Backend>>::BoxedClause:
-            LoadQuery<'query, Database, Value>
-                + QueryFragment<<Database as Connection>::Backend>
-                + query_builder::Query
-                + Send,
-        for<'query> <<Query as IntoBoxedClause<'query, Database::Backend>>::BoxedClause as AsQuery>::Query:
-            QueryId,
-        <Database as Connection>::Backend: Default,
-        <<Database>::Backend as Backend>::QueryBuilder: Default,
+        for<'query> Query: RunQueryDsl<Database::Connection>
+            + QueryFragment<<Database::Connection as Connection>::Backend>
+            + LoadQuery<'query, Database::Connection, Value>,
     {
-        let tables = self.get_tables_present(&query);
-        let (sender, reciever) = oneshot::channel();
+        let all_tables = self.all_tables.clone();
         let pool = self.pool.clone();
-        let boxed_query = query.into_boxed();
+
+        let (sender, reciver) = oneshot::channel();
+
         task::spawn(async move {
-            let result = boxed_query.load(&mut *pool.lock().await);
-            let _ = sender.send(result);
+            let query = query_fn();
+            let tables = Self::get_tables_present(all_tables, &query);
+            let conn = &mut pool.get().unwrap();
+            let result = query.load(conn);
+            let _ = sender.send(ExecutingQuery::new(tables, result));
         });
-        let _ = self
-            .executing_query
-            .insert(ExecutingQuery::new(tables, reciever));
+        let _ = self.executing_query.insert(reciver);
     }
-    pub fn execute<Execute>(&mut self, execute: Execute)
+    pub fn execute<Execute>(&mut self, execute_fn: impl FnOnce() -> Execute + Send + 'static)
     where
-        for<'query> Execute: IntoBoxedClause<'query, Database::Backend>
-            + RunQueryDsl<Database>
-            + ExecuteDsl<Database>
-            + QueryFragment<<Database as Connection>::Backend>
-            + 'static,
-        for<'query> <Execute as IntoBoxedClause<'query, Database::Backend>>::BoxedClause:
-            ExecuteDsl<Database>
-                + RunQueryDsl<Database>
-                + QueryFragment<<Database as Connection>::Backend>
-                + Query
-                + Send,
-        for<'query> <<Execute as IntoBoxedClause<'query, Database::Backend>>::BoxedClause as AsQuery>::Query:
-            QueryId,
-        <Database as Connection>::Backend: Default,
-        <<Database>::Backend as Backend>::QueryBuilder: Default,
+        Execute: RunQueryDsl<Database::Connection>
+            + QueryFragment<<Database::Connection as Connection>::Backend>
+            + ExecuteDsl<Database::Connection>
     {
-        let tables = self.get_tables_present(&execute);
-        let (sender, reciever) = oneshot::channel();
+        let all_tables = self.all_tables.clone();
         let pool = self.pool.clone();
-        let boxed_execute = execute.into_boxed();
-        tokio::spawn(async move {
-            let result = boxed_execute.execute(&mut *pool.lock().await);
-            let _ = sender.send(result);
+
+        let (sender, reciever) = oneshot::channel();
+
+        task::spawn(async move {
+            let execute = execute_fn();
+            let tables = Self::get_tables_present(all_tables, &execute);
+            let conn = &mut pool.get().unwrap();
+            let result = execute.execute(conn);
+            let _ = sender.send(ExecutingExecute::new(tables, result));
         });
-        self.executing_executes
-            .push(ExecutingExecute::new(tables, reciever));
+
+        self.executing_executes.push(reciever);
     }
 
-    fn get_tables_present<T>(&self, query: &T) -> Vec<String>
+    fn get_tables_present<Query>(all_tables: Vec<String>, query: &Query) -> Vec<String>
     where
-        T: QueryFragment<<Database as Connection>::Backend>,
-        <Database>::Backend: Default,
-        <<Database>::Backend as Backend>::QueryBuilder: Default,
+        Query: RunQueryDsl<Database::Connection>
+            + QueryFragment<<Database::Connection as Connection>::Backend>,
     {
-        let sql = format!("{}", debug_query::<Database::Backend, T>(query));
-        self.all_tables
+        let dbg = debug_query::<<Database::Connection as Connection>::Backend, Query>(query);
+        let sql = format!("{dbg}");
+        all_tables
             .iter()
             .filter_map(|table| {
                 sql.find(&format!("`{table}`"))
@@ -208,34 +204,31 @@ where
     Value: Send + 'static,
 {
     interested_tables: Vec<String>,
-    reciever: oneshot::Receiver<QueryResult<Vec<Value>>>,
+    values: QueryResult<Vec<Value>>,
 }
 
 impl<Value> ExecutingQuery<Value>
 where
     Value: Send + 'static,
 {
-    fn new(
-        interested_tables: Vec<String>,
-        reciever: oneshot::Receiver<QueryResult<Vec<Value>>>,
-    ) -> Self {
+    fn new(interested_tables: Vec<String>, values: QueryResult<Vec<Value>>) -> Self {
         Self {
             interested_tables,
-            reciever,
+            values,
         }
     }
 }
 
 struct ExecutingExecute {
     affected_tables: Vec<String>,
-    reciever: oneshot::Receiver<QueryResult<usize>>,
+    result: QueryResult<usize>,
 }
 
 impl ExecutingExecute {
-    fn new(affected_tables: Vec<String>, reciever: oneshot::Receiver<QueryResult<usize>>) -> Self {
+    fn new(affected_tables: Vec<String>, result: QueryResult<usize>) -> Self {
         Self {
             affected_tables,
-            reciever,
+            result,
         }
     }
 }

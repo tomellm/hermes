@@ -1,21 +1,22 @@
 use std::{
-    collections::HashSet,
-    sync::{
+    collections::HashSet, fmt::Display, sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
-    },
+    }
 };
 
-use diesel::Connection;
-use tokio::sync::{mpsc, Mutex};
+use diesel::{
+    backend::Backend, r2d2::{ManageConnection, Pool}, Connection
+};
+use tokio::sync::mpsc;
 
-use crate::container::Container;
+use crate::{container::Container, factory::Factory};
 
 pub struct Messenger<Database>
 where
-    Database: Connection,
+    Database: ManageConnection,
 {
-    pool: Arc<Mutex<Database>>,
+    pool: Pool<Database>,
     all_tables: Vec<String>,
     tables_changed: mpsc::Receiver<Vec<String>>,
     tables_changed_sender: mpsc::Sender<Vec<String>>,
@@ -26,9 +27,12 @@ where
 
 impl<Database> Messenger<Database>
 where
-    Database: Connection + 'static,
+    Database: ManageConnection + 'static,
+    Database::Connection: Connection,
+    <Database::Connection as Connection>::Backend: Default,
+    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
 {
-    pub fn new(pool: Arc<Mutex<Database>>) -> Self {
+    pub fn new(pool: Pool<Database>) -> Self {
         let (tables_changed_sender, tables_changed) = mpsc::channel(50);
         let (new_register_sender, new_register_reciver) = mpsc::channel(5);
         Self {
@@ -38,7 +42,7 @@ where
             tables_changed_sender,
             container_data: vec![],
             new_register_reciver,
-            new_register_sender
+            new_register_sender,
         }
     }
 
@@ -60,7 +64,16 @@ where
             tables_interested_sender,
             self.tables_changed_sender.clone(),
             should_update,
-            self.new_register_sender.clone()
+            self.new_register_sender.clone(),
+        )
+    }
+
+    pub fn factory(&self) -> Factory<Database> {
+        Factory::new(
+            self.pool.clone(),
+            self.all_tables.clone(),
+            self.tables_changed_sender.clone(),
+            self.new_register_sender.clone(),
         )
     }
 
@@ -92,7 +105,10 @@ pub struct ContainerData {
 }
 
 impl ContainerData {
-    pub(crate) fn new(update_reciver: mpsc::Receiver<Vec<String>>, should_update: Arc<AtomicBool>) -> Self {
+    pub(crate) fn new(
+        update_reciver: mpsc::Receiver<Vec<String>>,
+        should_update: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             tables_interested: vec![],
             update_reciver,
