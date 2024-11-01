@@ -1,16 +1,20 @@
 use std::{
-    collections::HashSet, fmt::Display, sync::{
+    collections::HashSet,
+    fmt::Display,
+    sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
-    }
+    },
 };
 
 use diesel::{
-    backend::Backend, r2d2::{ManageConnection, Pool}, Connection
+    backend::Backend,
+    r2d2::{ManageConnection, Pool},
+    Connection,
 };
 use tokio::sync::mpsc;
 
-use crate::{container::Container, factory::Factory};
+use crate::{container::simple::Container, factory::Factory};
 
 pub struct Messenger<Database>
 where

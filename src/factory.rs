@@ -1,13 +1,24 @@
-use std::{fmt::Display, sync::{atomic::AtomicBool, Arc}};
+use std::sync::{atomic::AtomicBool, Arc};
 
-use diesel::{backend::Backend, r2d2::{ManageConnection, Pool}, Connection};
+use diesel::{
+    backend::Backend,
+    r2d2::{ManageConnection, Pool},
+    Connection,
+};
 use tokio::{sync::mpsc, task};
 
-use crate::{container::Container, messenger::ContainerData};
+use crate::{
+    carrier::Carrier,
+    container::{projecting::ProjectingContainer, simple::Container, ContainerBuilder},
+    messenger::ContainerData,
+};
 
 pub struct Factory<Database>
 where
     Database: ManageConnection,
+    Database::Connection: Connection,
+    <Database::Connection as Connection>::Backend: Default,
+    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
 {
     pool: Pool<Database>,
     all_tables: Vec<String>,
@@ -36,26 +47,39 @@ where
         }
     }
 
-    pub async fn register_new<Value>(&self) -> Container<Value, Database>
+    pub fn builder<DbValue>(&self) -> ContainerBuilder<Database, DbValue>
+    where
+        DbValue: Send + 'static,
+    {
+        ContainerBuilder::new(self.)
+    }
+
+    pub fn register_simple<Value>(&self) -> Container<Value, Database>
     where
         Value: Send + 'static,
     {
-        let (tables_interested_sender, tables_interested_reciever) = mpsc::channel(3);
-        let should_update = Arc::new(AtomicBool::new(false));
+        Container::from_carrier(self.new_carrier())
+    }
 
-        let sender = self.new_register_sender.clone();
-        let data = ContainerData::new(tables_interested_reciever, Arc::clone(&should_update));
-        task::spawn(async move {
-            let _ = sender.send(data).await;
-        });
+    pub fn register_projector<Value, DbValue>(
+        &self,
+        from_db_fn: impl Fn(DbValue) -> Value + Send + 'static,
+    ) -> ProjectingContainer<Value, DbValue, Database>
+    where
+        Value: Send + 'static,
+        DbValue: Send + 'static,
+    {
+        ProjectingContainer::from_carrier(Arc::new(from_db_fn), self.new_carrier())
+    }
 
-        Container::new(
-            self.pool.clone(),
-            self.all_tables.clone(),
-            tables_interested_sender,
-            self.tables_changed_sender.clone(),
-            should_update,
-            self.new_register_sender.clone(),
-        )
+    pub fn register_projector_arc<Value, DbValue>(
+        &self,
+        from_db: Arc<dyn Fn(DbValue) -> Value + Send + 'static>,
+    ) -> ProjectingContainer<Value, DbValue, Database>
+    where
+        Value: Send + 'static,
+        DbValue: Send + 'static,
+    {
+        ProjectingContainer::from_carrier(from_db, self.new_carrier())
     }
 }
