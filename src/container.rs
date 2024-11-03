@@ -9,7 +9,10 @@ use projecting::ProjectingContainer;
 use simple::Container;
 use tokio::sync::mpsc;
 
-use crate::{carrier::Carrier, messenger::ContainerData};
+use crate::{
+    carrier::{self, execute::ExecuteCarrier, query::QueryCarrier},
+    messenger::ContainerData,
+};
 
 pub mod projecting;
 pub mod simple;
@@ -52,36 +55,39 @@ where
     where
         DbValue: Send + 'static,
     {
-        Container::from_carrier(self.new_carrier())
+        let (query, execute) = self.new_carriers();
+        Container::from_carriers(query, execute)
     }
 
     pub fn projector<Value, DbValue>(
         self,
-        from_db_fn: impl Fn(DbValue) -> Value + Send + 'static,
+        from_db_fn: impl Fn(DbValue) -> Value + Sync + Send + 'static,
     ) -> ProjectingContainer<Value, DbValue, Database>
     where
         Value: Send + 'static,
         DbValue: Send + 'static,
     {
-        ProjectingContainer::from_carrier(Arc::new(from_db_fn), self.new_carrier())
+        let (query, execute) = self.new_carriers();
+        ProjectingContainer::from_carriers(Arc::new(from_db_fn), query, execute)
     }
 
     pub fn projector_arc<Value, DbValue>(
         self,
-        from_db_fn: Arc<dyn Fn(DbValue) -> Value + Send + 'static>,
+        from_db_fn: Arc<dyn Fn(DbValue) -> Value + Sync + Send + 'static>,
     ) -> ProjectingContainer<Value, DbValue, Database>
     where
         Value: Send + 'static,
         DbValue: Send + 'static,
     {
-        ProjectingContainer::from_carrier(from_db_fn, self.new_carrier())
+        let (query, execute) = self.new_carriers();
+        ProjectingContainer::from_carriers(from_db_fn, query, execute)
     }
 
-    fn new_carrier<DbValue>(&self) -> Carrier<Database, DbValue>
+    fn new_carriers<DbValue>(&self) -> (QueryCarrier<Database, DbValue>, ExecuteCarrier<Database>)
     where
         DbValue: Send + 'static,
     {
-        Carrier::register_new(
+        carrier::both_carriers(
             self.pool.clone(),
             self.all_tables.clone(),
             self.tables_changed_sender.clone(),

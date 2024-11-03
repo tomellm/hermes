@@ -1,6 +1,5 @@
 use std::{
     collections::HashSet,
-    fmt::Display,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -14,7 +13,7 @@ use diesel::{
 };
 use tokio::sync::mpsc;
 
-use crate::{container::simple::Container, factory::Factory};
+use crate::{container::ContainerBuilder, factory::Factory};
 
 pub struct Messenger<Database>
 where
@@ -50,24 +49,11 @@ where
         }
     }
 
-    pub fn new_container<Value>(&mut self) -> Container<Value, Database>
-    where
-        Value: Send + 'static,
-    {
-        let (tables_interested_sender, tables_interested_reciever) = mpsc::channel(3);
-        let should_update = Arc::new(AtomicBool::new(false));
-
-        self.container_data.push(ContainerData::new(
-            tables_interested_reciever,
-            Arc::clone(&should_update),
-        ));
-
-        Container::new(
+    pub fn builder(&self) -> ContainerBuilder<Database> {
+        ContainerBuilder::new(
             self.pool.clone(),
             self.all_tables.clone(),
-            tables_interested_sender,
             self.tables_changed_sender.clone(),
-            should_update,
             self.new_register_sender.clone(),
         )
     }

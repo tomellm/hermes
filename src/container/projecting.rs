@@ -1,4 +1,4 @@
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::Arc;
 
 use tracing::error;
 
@@ -6,12 +6,13 @@ use diesel::{
     backend::Backend,
     query_builder::QueryFragment,
     query_dsl::methods::{ExecuteDsl, LoadQuery},
-    r2d2::{ManageConnection, Pool},
+    r2d2::ManageConnection,
     Connection, RunQueryDsl,
 };
-use tokio::sync::mpsc;
 
-use crate::{carrier::Carrier, messenger::ContainerData};
+use crate::{actor::Actor, carrier::{execute::ExecuteCarrier, query::QueryCarrier}};
+
+use super::ContainerBuilder;
 
 pub struct ProjectingContainer<Value, DbValue, Database>
 where
@@ -19,9 +20,10 @@ where
     Value: Send + 'static,
     DbValue: Send + 'static,
 {
-    from_db: Arc<dyn Fn(DbValue) -> Value + Send + 'static>,
+    from_db: Arc<dyn Fn(DbValue) -> Value + Sync + Send + 'static>,
     values: Vec<Value>,
-    carrier: Carrier<Database, DbValue>,
+    query_carrier: QueryCarrier<Database, DbValue>,
+    execute_carrier: ExecuteCarrier<Database>,
 }
 
 impl<Value, DbValue, Database> ProjectingContainer<Value, DbValue, Database>
@@ -33,38 +35,21 @@ where
     Value: Send + 'static,
     DbValue: Send + 'static,
 {
-    pub(crate) fn new(
-        pool: Pool<Database>,
-        all_tables: Vec<String>,
-        from_db_fn: impl Fn(DbValue) -> Value + Send + 'static,
-        tables_interested_sender: mpsc::Sender<Vec<String>>,
-        tables_changed_sender: mpsc::Sender<Vec<String>>,
-        should_update: Arc<AtomicBool>,
-        new_register_sender: mpsc::Sender<ContainerData>,
-    ) -> Self {
-        Self {
-            from_db: Arc::new(from_db_fn),
-            values: vec![],
-            carrier: Carrier::new(
-                pool,
-                all_tables,
-                tables_interested_sender,
-                tables_changed_sender,
-                should_update,
-                new_register_sender,
-            ),
-        }
-    }
-
-    pub(crate) fn from_carrier(
-        from_db: Arc<dyn Fn(DbValue) -> Value + Send + 'static>,
-        carrier: Carrier<Database, DbValue>,
+    pub(crate) fn from_carriers(
+        from_db: Arc<dyn Fn(DbValue) -> Value + Sync + Send + 'static>,
+        query_carrier: QueryCarrier<Database, DbValue>,
+        execute_carrier: ExecuteCarrier<Database>,
     ) -> Self {
         Self {
             from_db,
             values: vec![],
-            carrier,
+            query_carrier,
+            execute_carrier,
         }
+    }
+
+    pub fn builder(&self) -> ContainerBuilder<Database> {
+        self.query_carrier.builder()
     }
 
     pub fn values(&self) -> &Vec<Value> {
@@ -72,7 +57,7 @@ where
     }
 
     pub fn state_update(&mut self) {
-        if let Some(result) = self.carrier.try_resolve_query() {
+        if let Some(result) = self.query_carrier.try_resolve_query() {
             match result {
                 Ok(values) => {
                     self.values = values.into_iter().map(|val| (self.from_db)(val)).collect();
@@ -80,11 +65,11 @@ where
                 Err(error) => error!("{error}"),
             }
         }
-        self.carrier.try_resolve_executes();
+        self.execute_carrier.try_resolve_executes();
     }
 
     pub fn should_refresh(&self) -> bool {
-        self.carrier.should_refresh()
+        self.query_carrier.should_refresh()
     }
 
     pub fn query<Query>(&mut self, query_fn: impl FnOnce() -> Query + Send + 'static)
@@ -93,7 +78,7 @@ where
             + QueryFragment<<Database::Connection as Connection>::Backend>
             + LoadQuery<'query, Database::Connection, DbValue>,
     {
-        self.carrier.query(query_fn);
+        self.query_carrier.query(query_fn);
     }
     pub fn execute<Execute>(&mut self, execute_fn: impl FnOnce() -> Execute + Send + 'static)
     where
@@ -101,7 +86,11 @@ where
             + QueryFragment<<Database::Connection as Connection>::Backend>
             + ExecuteDsl<Database::Connection>,
     {
-        self.carrier.execute(execute_fn);
+        self.execute_carrier.execute(execute_fn);
+    }
+
+    pub fn actor(&self) -> Actor<Database> {
+        Actor::new(self.execute_carrier.clone())
     }
 }
 
@@ -118,7 +107,8 @@ where
         Self {
             from_db: Arc::clone(&self.from_db),
             values: vec![],
-            carrier: self.carrier.clone(),
+            query_carrier: self.query_carrier.clone(),
+            execute_carrier: self.execute_carrier.clone(),
         }
     }
 }

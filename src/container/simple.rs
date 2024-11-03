@@ -1,4 +1,3 @@
-use std::sync::{atomic::AtomicBool, Arc};
 
 use tracing::error;
 
@@ -6,12 +5,15 @@ use diesel::{
     backend::Backend,
     query_builder::QueryFragment,
     query_dsl::methods::{ExecuteDsl, LoadQuery},
-    r2d2::{ManageConnection, Pool},
+    r2d2::ManageConnection,
     Connection, RunQueryDsl,
 };
-use tokio::sync::mpsc;
 
-use crate::{carrier::Carrier, messenger::ContainerData};
+use crate::
+    carrier::{execute::ExecuteCarrier, query::QueryCarrier}
+;
+
+use super::ContainerBuilder;
 
 pub struct Container<Value, Database>
 where
@@ -19,7 +21,8 @@ where
     Value: Send + 'static,
 {
     values: Vec<Value>,
-    carrier: Carrier<Database, Value>,
+    query_carrier: QueryCarrier<Database, Value>,
+    execute_carrier: ExecuteCarrier<Database>,
 }
 
 impl<Value, Database> Container<Value, Database>
@@ -30,36 +33,23 @@ where
     <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
     Value: Send + 'static,
 {
-    pub(crate) fn new(
-        pool: Pool<Database>,
-        all_tables: Vec<String>,
-        tables_interested_sender: mpsc::Sender<Vec<String>>,
-        tables_changed_sender: mpsc::Sender<Vec<String>>,
-        should_update: Arc<AtomicBool>,
-        new_register_sender: mpsc::Sender<ContainerData>,
+    pub(crate) fn from_carriers(
+        query_carrier: QueryCarrier<Database, Value>,
+        execute_carrier: ExecuteCarrier<Database>,
     ) -> Self {
         Self {
             values: vec![],
-            carrier: Carrier::new(
-                pool,
-                all_tables,
-                tables_interested_sender,
-                tables_changed_sender,
-                should_update,
-                new_register_sender,
-            ),
+            query_carrier,
+            execute_carrier
         }
     }
 
-    pub fn from_carrier(carrier: Carrier<Database, Value>) -> Self {
-        Self {
-            values: vec![],
-            carrier,
-        }
+    pub fn builder(&self) -> ContainerBuilder<Database> {
+        self.query_carrier.builder()
     }
 
     pub fn state_update(&mut self) {
-        if let Some(result) = self.carrier.try_resolve_query() {
+        if let Some(result) = self.query_carrier.try_resolve_query() {
             match result {
                 Ok(values) => {
                     self.values = values;
@@ -67,11 +57,11 @@ where
                 Err(error) => error!("{error}"),
             }
         }
-        self.carrier.try_resolve_executes();
+        self.execute_carrier.try_resolve_executes();
     }
 
     pub fn should_refresh(&self) -> bool {
-        self.carrier.should_refresh()
+        self.query_carrier.should_refresh()
     }
 
     pub fn query<Query>(&mut self, query_fn: impl FnOnce() -> Query + Send + 'static)
@@ -80,7 +70,7 @@ where
             + QueryFragment<<Database::Connection as Connection>::Backend>
             + LoadQuery<'query, Database::Connection, Value>,
     {
-        self.carrier.query(query_fn);
+        self.query_carrier.query(query_fn);
     }
     pub fn execute<Execute>(&mut self, execute_fn: impl FnOnce() -> Execute + Send + 'static)
     where
@@ -88,7 +78,7 @@ where
             + QueryFragment<<Database::Connection as Connection>::Backend>
             + ExecuteDsl<Database::Connection>,
     {
-        self.carrier.execute(execute_fn);
+        self.execute_carrier.execute(execute_fn);
     }
 }
 
@@ -103,7 +93,8 @@ where
     fn clone(&self) -> Self {
         Self {
             values: vec![],
-            carrier: self.carrier.clone(),
+            query_carrier: self.query_carrier.clone(),
+            execute_carrier: self.execute_carrier.clone()
         }
     }
 }
