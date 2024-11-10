@@ -1,9 +1,6 @@
+
 use diesel::{
-    backend::Backend,
-    query_builder::QueryFragment,
-    query_dsl::methods::ExecuteDsl,
-    r2d2::ManageConnection,
-    Connection, RunQueryDsl,
+    backend::Backend, query_builder::QueryFragment, query_dsl::methods::ExecuteDsl, r2d2::ManageConnection, Connection, RunQueryDsl
 };
 
 use crate::carrier::execute::ExecuteCarrier;
@@ -28,7 +25,6 @@ where
     pub(crate) fn new(executor: ExecuteCarrier<Database>) -> Self {
         Self { executor }
     }
-
 
     pub fn execute<Execute>(&mut self, execute_fn: impl FnOnce() -> Execute + Send + 'static)
     where

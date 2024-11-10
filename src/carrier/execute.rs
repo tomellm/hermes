@@ -129,11 +129,10 @@ where
         Query: RunQueryDsl<Database::Connection>
             + QueryFragment<<Database::Connection as Connection>::Backend>,
     {
-        let dbg = debug_query::<<Database::Connection as Connection>::Backend, Query>(query);
-        let sql = format!("{dbg}");
+        let dbg_query = debug_query::<<Database::Connection as Connection>::Backend, Query>(query).to_string();
         all_tables
             .into_iter()
-            .filter_map(|table| sql.find(&format!("`{table}`")).map(|_| table))
+            .filter_map(|table| dbg_query.find(&format!("`{table}`")).map(|_| table))
             .collect::<Vec<_>>()
     }
 }
