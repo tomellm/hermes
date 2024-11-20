@@ -6,20 +6,16 @@ use std::{
     },
 };
 
-use diesel::{
-    backend::Backend,
-    r2d2::{ManageConnection, Pool},
-    Connection,
-};
+use sqlx::{Database, Executor, Pool};
 use tokio::sync::mpsc;
 
 use crate::{container::ContainerBuilder, factory::Factory};
 
-pub struct Messenger<Database>
+pub struct Messenger<DB>
 where
-    Database: ManageConnection,
+    DB: Database,
 {
-    pool: Pool<Database>,
+    pool: Arc<Pool<DB>>,
     all_tables: Vec<String>,
     tables_changed: mpsc::Receiver<Vec<String>>,
     tables_changed_sender: mpsc::Sender<Vec<String>>,
@@ -28,14 +24,12 @@ where
     new_register_sender: mpsc::Sender<ContainerData>,
 }
 
-impl<Database> Messenger<Database>
+impl<DB> Messenger<DB>
 where
-    Database: ManageConnection + 'static,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
 {
-    pub fn new(pool: Pool<Database>) -> Self {
+    pub fn new(pool: Arc<Pool<DB>>) -> Self {
         let (tables_changed_sender, tables_changed) = mpsc::channel(50);
         let (new_register_sender, new_register_reciver) = mpsc::channel(5);
         Self {
@@ -49,7 +43,7 @@ where
         }
     }
 
-    pub fn builder(&self) -> ContainerBuilder<Database> {
+    pub fn builder(&self) -> ContainerBuilder<DB> {
         ContainerBuilder::new(
             self.pool.clone(),
             self.all_tables.clone(),
@@ -58,7 +52,7 @@ where
         )
     }
 
-    pub fn factory(&self) -> Factory<Database> {
+    pub fn factory(&self) -> Factory<DB> {
         Factory::new(
             self.pool.clone(),
             self.all_tables.clone(),

@@ -1,37 +1,29 @@
-
-use diesel::{
-    backend::Backend, query_builder::QueryFragment, query_dsl::methods::ExecuteDsl, r2d2::ManageConnection, Connection, RunQueryDsl
-};
+use sqlx::{Database, Executor, IntoArguments, QueryBuilder};
 
 use crate::carrier::execute::ExecuteCarrier;
 
-pub struct Actor<Database>
+pub struct Actor<DB>
 where
-    Database: ManageConnection + 'static,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
 {
-    executor: ExecuteCarrier<Database>,
+    executor: ExecuteCarrier<DB>,
 }
 
-impl<Database> Actor<Database>
+impl<DB> Actor<DB>
 where
-    Database: ManageConnection + 'static,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
 {
-    pub(crate) fn new(executor: ExecuteCarrier<Database>) -> Self {
+    pub(crate) fn new(executor: ExecuteCarrier<DB>) -> Self {
         Self { executor }
     }
 
-    pub fn execute<Execute>(&mut self, execute_fn: impl FnOnce() -> Execute + Send + 'static)
+    pub fn execute<BuildFn>(&mut self, create_execute: BuildFn)
     where
-        Execute: RunQueryDsl<Database::Connection>
-            + QueryFragment<<Database::Connection as Connection>::Backend>
-            + ExecuteDsl<Database::Connection>,
+        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
+        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static,
     {
-        self.executor.execute(execute_fn);
+        self.executor.execute(create_execute);
     }
 }

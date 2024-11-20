@@ -1,50 +1,39 @@
-
+use sqlx::{Database, Executor, FromRow, IntoArguments, QueryBuilder};
 use tracing::error;
 
-use diesel::{
-    backend::Backend,
-    query_builder::QueryFragment,
-    query_dsl::methods::{ExecuteDsl, LoadQuery},
-    r2d2::ManageConnection,
-    Connection, RunQueryDsl,
-};
-
-use crate::
-    carrier::{execute::ExecuteCarrier, query::QueryCarrier}
-;
+use crate::carrier::{execute::ExecuteCarrier, query::QueryCarrier};
 
 use super::ContainerBuilder;
 
-pub struct Container<Value, Database>
+pub struct Container<Value, DB>
 where
-    Database: ManageConnection + 'static,
-    Value: Send + 'static,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
+    for<'row> Value: FromRow<'row, DB::Row> + Send + 'static,
 {
     values: Vec<Value>,
-    query_carrier: QueryCarrier<Database, Value>,
-    execute_carrier: ExecuteCarrier<Database>,
+    query_carrier: QueryCarrier<DB, Value>,
+    execute_carrier: ExecuteCarrier<DB>,
 }
 
-impl<Value, Database> Container<Value, Database>
+impl<Value, DB> Container<Value, DB>
 where
-    Database: ManageConnection + 'static,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
-    Value: Send + 'static,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
+    for<'row> Value: FromRow<'row, DB::Row> + Send + 'static,
 {
     pub(crate) fn from_carriers(
-        query_carrier: QueryCarrier<Database, Value>,
-        execute_carrier: ExecuteCarrier<Database>,
+        query_carrier: QueryCarrier<DB, Value>,
+        execute_carrier: ExecuteCarrier<DB>,
     ) -> Self {
         Self {
             values: vec![],
             query_carrier,
-            execute_carrier
+            execute_carrier,
         }
     }
 
-    pub fn builder(&self) -> ContainerBuilder<Database> {
+    pub fn builder(&self) -> ContainerBuilder<DB> {
         self.query_carrier.builder()
     }
 
@@ -64,37 +53,34 @@ where
         self.query_carrier.should_refresh()
     }
 
-    pub fn query<Query>(&mut self, query_fn: impl FnOnce() -> Query + Send + 'static)
+    pub fn query<BuildFn>(&mut self, create_query: BuildFn)
     where
-        for<'query> Query: RunQueryDsl<Database::Connection>
-            + QueryFragment<<Database::Connection as Connection>::Backend>
-            + LoadQuery<'query, Database::Connection, Value>,
+        Value: Unpin,
+        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
+        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static,
     {
-        self.query_carrier.query(query_fn);
+        self.query_carrier.query(create_query);
     }
-    pub fn execute<Execute>(&mut self, execute_fn: impl FnOnce() -> Execute + Send + 'static)
+    pub fn execute<BuildFn>(&mut self, create_execute: BuildFn)
     where
-        Execute: RunQueryDsl<Database::Connection>
-            + QueryFragment<<Database::Connection as Connection>::Backend>
-            + ExecuteDsl<Database::Connection>,
+        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
+        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static,
     {
-        self.execute_carrier.execute(execute_fn);
+        self.execute_carrier.execute(create_execute);
     }
 }
 
-impl<Value, Database> Clone for Container<Value, Database>
+impl<Value, DB> Clone for Container<Value, DB>
 where
-    Database: ManageConnection + 'static,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
-    Value: Send + 'static,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
+    for<'row> Value: FromRow<'row, DB::Row> + Send + 'static,
 {
     fn clone(&self) -> Self {
         Self {
             values: vec![],
             query_carrier: self.query_carrier.clone(),
-            execute_carrier: self.execute_carrier.clone()
+            execute_carrier: self.execute_carrier.clone(),
         }
     }
 }

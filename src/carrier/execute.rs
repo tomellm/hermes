@@ -1,12 +1,7 @@
-use diesel::{
-    backend::Backend,
-    debug_query,
-    query_builder::QueryFragment,
-    query_dsl::methods::ExecuteDsl,
-    r2d2::{ManageConnection, Pool},
-    Connection, QueryResult, RunQueryDsl,
-};
+use std::sync::Arc;
 
+use sqlx::{Database, Execute, Executor, IntoArguments, Pool, QueryBuilder};
+use sqlx_projector::builder;
 use tokio::{
     sync::{
         mpsc,
@@ -16,25 +11,24 @@ use tokio::{
 };
 use tracing::error;
 
-use crate::messenger::ContainerData;
+use crate::{get_tables_present, messenger::ContainerData};
 
-pub(crate) struct ExecuteCarrier<Database>
+pub(crate) struct ExecuteCarrier<DB>
 where
-    Database: ManageConnection + 'static,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
 {
-    pool: Pool<Database>,
+    pool: Arc<Pool<DB>>,
     all_tables: Vec<String>,
-    executing_executes: Vec<oneshot::Receiver<ExecutingExecute>>,
+    executing_executes: Vec<oneshot::Receiver<ExecutingExecute<DB>>>,
     tables_changed_sender: mpsc::Sender<Vec<String>>,
     new_register_sender: mpsc::Sender<ContainerData>,
 }
 
-impl<Database> Clone for ExecuteCarrier<Database>
+impl<DB> Clone for ExecuteCarrier<DB>
 where
-    Database: ManageConnection + 'static,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
 {
     fn clone(&self) -> Self {
         Self::register_new(
@@ -46,15 +40,13 @@ where
     }
 }
 
-impl<Database> ExecuteCarrier<Database>
+impl<DB> ExecuteCarrier<DB>
 where
-    Database: ManageConnection + 'static,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
 {
     pub fn register_new(
-        pool: Pool<Database>,
+        pool: Arc<Pool<DB>>,
         all_tables: Vec<String>,
         tables_changed_sender: mpsc::Sender<Vec<String>>,
         new_register_sender: mpsc::Sender<ContainerData>,
@@ -63,7 +55,7 @@ where
     }
 
     fn new(
-        pool: Pool<Database>,
+        pool: Arc<Pool<DB>>,
         all_tables: Vec<String>,
         tables_changed_sender: mpsc::Sender<Vec<String>>,
         new_register_sender: mpsc::Sender<ContainerData>,
@@ -102,51 +94,36 @@ where
             });
     }
 
-    pub fn execute<Execute>(&mut self, execute_fn: impl FnOnce() -> Execute + Send + 'static)
+    pub fn execute<BuildFn>(&mut self, create_execute: BuildFn)
     where
-        Execute: RunQueryDsl<Database::Connection>
-            + QueryFragment<<Database::Connection as Connection>::Backend>
-            + ExecuteDsl<Database::Connection>,
+        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
+        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static,
     {
         let all_tables = self.all_tables.clone();
         let pool = self.pool.clone();
-
         let (sender, reciever) = oneshot::channel();
 
         task::spawn(async move {
-            let execute = execute_fn();
-            let tables = Self::get_tables_present(all_tables, &execute);
-            let conn = &mut pool.get().unwrap();
-            let result = execute.execute(conn);
-            let _ = sender.send(ExecutingExecute::new(tables, result));
+            let mut builder = builder();
+            create_execute(&mut builder);
+            let execute = builder.build();
+
+            let tables = get_tables_present(all_tables, execute.sql());
+            let query_result = execute.execute(&*pool).await;
+            let _ = sender.send(ExecutingExecute {
+                affected_tables: tables,
+                result: query_result,
+            });
         });
 
         self.executing_executes.push(reciever);
     }
-
-    fn get_tables_present<Query>(all_tables: Vec<String>, query: &Query) -> Vec<String>
-    where
-        Query: RunQueryDsl<Database::Connection>
-            + QueryFragment<<Database::Connection as Connection>::Backend>,
-    {
-        let dbg_query = debug_query::<<Database::Connection as Connection>::Backend, Query>(query).to_string();
-        all_tables
-            .into_iter()
-            .filter_map(|table| dbg_query.find(&format!("`{table}`")).map(|_| table))
-            .collect::<Vec<_>>()
-    }
 }
 
-struct ExecutingExecute {
+struct ExecutingExecute<DB>
+where
+    DB: Database,
+{
     affected_tables: Vec<String>,
-    result: QueryResult<usize>,
-}
-
-impl ExecutingExecute {
-    fn new(affected_tables: Vec<String>, result: QueryResult<usize>) -> Self {
-        Self {
-            affected_tables,
-            result,
-        }
-    }
+    result: sqlx::Result<DB::QueryResult>,
 }

@@ -1,31 +1,23 @@
-use diesel::{
-    backend::Backend,
-    r2d2::{ManageConnection, Pool},
-    Connection,
-};
+use std::sync::Arc;
+
+use sqlx::{Database, Executor, Pool};
 use tokio::sync::mpsc;
 
 use crate::{container::ContainerBuilder, messenger::ContainerData};
 
-pub struct Factory<Database>
+pub struct Factory<DB>
 where
-    Database: ManageConnection,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
+    DB: Database,
 {
-    pool: Pool<Database>,
+    pool: Arc<Pool<DB>>,
     all_tables: Vec<String>,
     tables_changed_sender: mpsc::Sender<Vec<String>>,
     new_register_sender: mpsc::Sender<ContainerData>,
 }
 
-impl<Database> Clone for Factory<Database>
+impl<DB> Clone for Factory<DB>
 where
-    Database: ManageConnection,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
+    DB: Database,
 {
     fn clone(&self) -> Self {
         Self {
@@ -37,15 +29,13 @@ where
     }
 }
 
-impl<Database> Factory<Database>
+impl<DB> Factory<DB>
 where
-    Database: ManageConnection + 'static,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
 {
     pub fn new(
-        pool: Pool<Database>,
+        pool: Arc<Pool<DB>>,
         all_tables: Vec<String>,
         tables_changed_sender: mpsc::Sender<Vec<String>>,
         new_register_sender: mpsc::Sender<ContainerData>,
@@ -58,7 +48,7 @@ where
         }
     }
 
-    pub fn builder(&self) -> ContainerBuilder<Database> {
+    pub fn builder(&self) -> ContainerBuilder<DB> {
         ContainerBuilder::new(
             self.pool.clone(),
             self.all_tables.clone(),

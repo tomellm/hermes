@@ -1,12 +1,9 @@
 use std::sync::Arc;
 
-use diesel::{
-    backend::Backend,
-    r2d2::{ManageConnection, Pool},
-    Connection,
-};
 use projecting::ProjectingContainer;
 use simple::Container;
+use sqlx::{Database, Executor, FromRow, Pool};
+use sqlx_projector::projectors::{FromEntity, ToEntity};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -17,28 +14,24 @@ use crate::{
 pub mod projecting;
 pub mod simple;
 
-pub struct ContainerBuilder<Database>
+pub struct ContainerBuilder<DB>
 where
-    Database: ManageConnection + 'static,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
 {
-    pool: Pool<Database>,
+    pool: Arc<Pool<DB>>,
     all_tables: Vec<String>,
     tables_changed_sender: mpsc::Sender<Vec<String>>,
     new_register_sender: mpsc::Sender<ContainerData>,
 }
 
-impl<Database> ContainerBuilder<Database>
+impl<DB> ContainerBuilder<DB>
 where
-    Database: ManageConnection + 'static,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
 {
     pub fn new(
-        pool: Pool<Database>,
+        pool: Arc<Pool<DB>>,
         all_tables: Vec<String>,
         tables_changed_sender: mpsc::Sender<Vec<String>>,
         new_register_sender: mpsc::Sender<ContainerData>,
@@ -51,41 +44,27 @@ where
         }
     }
 
-    pub fn simple<DbValue>(self) -> Container<DbValue, Database>
+    pub fn simple<DbValue>(self) -> Container<DbValue, DB>
     where
-        DbValue: Send + 'static,
+        for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
     {
         let (query, execute) = self.new_carriers();
         Container::from_carriers(query, execute)
     }
 
-    pub fn projector<Value, DbValue>(
-        self,
-        from_db_fn: impl Fn(DbValue) -> Value + Sync + Send + 'static,
-    ) -> ProjectingContainer<Value, DbValue, Database>
+    pub fn projector<Value, DbValue>(self) -> ProjectingContainer<Value, DbValue, DB>
     where
         Value: Send + 'static,
-        DbValue: Send + 'static,
+        for<'row> DbValue:
+            FromRow<'row, DB::Row> + FromEntity<Value> + ToEntity<Value> + Send + 'static,
     {
         let (query, execute) = self.new_carriers();
-        ProjectingContainer::from_carriers(Arc::new(from_db_fn), query, execute)
+        ProjectingContainer::from_carriers(query, execute)
     }
 
-    pub fn projector_arc<Value, DbValue>(
-        self,
-        from_db_fn: Arc<dyn Fn(DbValue) -> Value + Sync + Send + 'static>,
-    ) -> ProjectingContainer<Value, DbValue, Database>
+    fn new_carriers<DbValue>(&self) -> (QueryCarrier<DB, DbValue>, ExecuteCarrier<DB>)
     where
-        Value: Send + 'static,
-        DbValue: Send + 'static,
-    {
-        let (query, execute) = self.new_carriers();
-        ProjectingContainer::from_carriers(from_db_fn, query, execute)
-    }
-
-    fn new_carriers<DbValue>(&self) -> (QueryCarrier<Database, DbValue>, ExecuteCarrier<Database>)
-    where
-        DbValue: Send + 'static,
+        for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
     {
         carrier::both_carriers(
             self.pool.clone(),

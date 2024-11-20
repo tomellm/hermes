@@ -1,16 +1,12 @@
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
+use std::
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    }
+;
 
-use diesel::{
-    backend::Backend,
-    debug_query,
-    query_builder::QueryFragment,
-    query_dsl::methods::LoadQuery,
-    r2d2::{ManageConnection, Pool},
-    Connection, QueryResult, RunQueryDsl,
-};
+use sqlx::{Database, Execute, Executor, FromRow, IntoArguments, Pool, QueryBuilder};
+use sqlx_projector::builder;
 use tokio::{
     sync::{
         mpsc,
@@ -19,14 +15,15 @@ use tokio::{
     task,
 };
 
-use crate::{container::ContainerBuilder, messenger::ContainerData};
+use crate::{container::ContainerBuilder, get_tables_present, messenger::ContainerData};
 
-pub struct QueryCarrier<Database, DbValue>
+pub struct QueryCarrier<DB, DbValue>
 where
-    Database: ManageConnection + 'static,
-    DbValue: Send + 'static,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
+    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
 {
-    pool: Pool<Database>,
+    pool: Arc<Pool<DB>>,
     all_tables: Vec<String>,
 
     interesting_tables: Vec<String>,
@@ -38,13 +35,11 @@ where
     tables_changed_sender: mpsc::Sender<Vec<String>>,
 }
 
-impl<Database, DbValue> Clone for QueryCarrier<Database, DbValue>
+impl<DB, DbValue> Clone for QueryCarrier<DB, DbValue>
 where
-    Database: ManageConnection + 'static,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
-    DbValue: Send + 'static,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
+    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
 {
     fn clone(&self) -> Self {
         Self::register_new(
@@ -56,16 +51,14 @@ where
     }
 }
 
-impl<Database, DbValue> QueryCarrier<Database, DbValue>
+impl<DB, DbValue> QueryCarrier<DB, DbValue>
 where
-    Database: ManageConnection + 'static,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
-    DbValue: Send + 'static,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
+    for<'row> DbValue: FromRow<'row, DB::Row> + Send,
 {
     pub fn register_new(
-        pool: Pool<Database>,
+        pool: Arc<Pool<DB>>,
         all_tables: Vec<String>,
         tables_changed_sender: mpsc::Sender<Vec<String>>,
         new_register_sender: mpsc::Sender<ContainerData>,
@@ -90,7 +83,7 @@ where
     }
 
     fn new(
-        pool: Pool<Database>,
+        pool: Arc<Pool<DB>>,
         all_tables: Vec<String>,
         tables_interested_sender: mpsc::Sender<Vec<String>>,
         tables_changed_sender: mpsc::Sender<Vec<String>>,
@@ -113,7 +106,7 @@ where
         self.should_update.load(Ordering::Relaxed)
     }
 
-    pub fn try_resolve_query(&mut self) -> Option<QueryResult<Vec<DbValue>>> {
+    pub fn try_resolve_query(&mut self) -> Option<sqlx::Result<Vec<DbValue>>> {
         let mut executing_query = self.executing_query.take()?;
         match executing_query.try_recv() {
             Ok(result) => {
@@ -139,42 +132,34 @@ where
         }
     }
 
-    pub fn query<Query>(&mut self, query_fn: impl FnOnce() -> Query + Send + 'static)
+    pub fn query<BuildFn>(&mut self, create_query: BuildFn)
     where
-        for<'query> Query: RunQueryDsl<Database::Connection>
-            + QueryFragment<<Database::Connection as Connection>::Backend>
-            + LoadQuery<'query, Database::Connection, DbValue>,
+        DbValue: Unpin,
+        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
+        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static,
     {
         let all_tables = self.all_tables.clone();
         let pool = self.pool.clone();
-
-        let (sender, reciver) = oneshot::channel();
+        let (sender, reciever) = oneshot::channel();
 
         task::spawn(async move {
-            let query = query_fn();
-            let tables = Self::get_tables_present(all_tables, &query);
-            let conn = &mut pool.get().unwrap();
-            let result = query.load(conn);
+            let mut builder = builder();
+            create_query(&mut builder);
+            let query = builder.build();
+
+            let tables = get_tables_present(all_tables, query.sql());
+
+            let result = query
+                .map(|v| DbValue::from_row(&v).unwrap())
+                .fetch_all(&*pool)
+                .await;
             let _ = sender.send(ExecutingQuery::new(tables, result));
         });
         #[allow(unused_must_use)]
-        self.executing_query.insert(reciver);
+        self.executing_query.insert(reciever);
     }
 
-    fn get_tables_present<Query>(all_tables: Vec<String>, query: &Query) -> Vec<String>
-    where
-        Query: RunQueryDsl<Database::Connection>
-            + QueryFragment<<Database::Connection as Connection>::Backend>,
-    {
-        let dbg = debug_query::<<Database::Connection as Connection>::Backend, Query>(query);
-        let sql = format!("{dbg}");
-        all_tables
-            .into_iter()
-            .filter_map(|table| sql.find(&format!("`{table}`")).map(|_| table))
-            .collect::<Vec<_>>()
-    }
-
-    pub fn builder(&self) -> ContainerBuilder<Database> {
+    pub fn builder(&self) -> ContainerBuilder<DB> {
         ContainerBuilder::new(
             self.pool.clone(),
             self.all_tables.clone(),
@@ -189,14 +174,14 @@ where
     DbValue: Send + 'static,
 {
     interested_tables: Vec<String>,
-    values: QueryResult<Vec<DbValue>>,
+    values: sqlx::Result<Vec<DbValue>>,
 }
 
 impl<DbValue> ExecutingQuery<DbValue>
 where
     DbValue: Send + 'static,
 {
-    fn new(interested_tables: Vec<String>, values: QueryResult<Vec<DbValue>>) -> Self {
+    fn new(interested_tables: Vec<String>, values: sqlx::Result<Vec<DbValue>>) -> Self {
         Self {
             interested_tables,
             values,

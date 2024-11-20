@@ -1,54 +1,46 @@
-use std::sync::Arc;
-
+use sqlx::{Database, Executor, FromRow, IntoArguments, QueryBuilder};
+use sqlx_projector::projectors::{FromEntity, ToEntity};
 use tracing::error;
 
-use diesel::{
-    backend::Backend,
-    query_builder::QueryFragment,
-    query_dsl::methods::{ExecuteDsl, LoadQuery},
-    r2d2::ManageConnection,
-    Connection, RunQueryDsl,
+use crate::{
+    actor::Actor,
+    carrier::{execute::ExecuteCarrier, query::QueryCarrier},
 };
-
-use crate::{actor::Actor, carrier::{execute::ExecuteCarrier, query::QueryCarrier}};
 
 use super::ContainerBuilder;
 
-pub struct ProjectingContainer<Value, DbValue, Database>
+pub struct ProjectingContainer<Value, DbValue, DB>
 where
-    Database: ManageConnection + 'static,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
     Value: Send + 'static,
-    DbValue: Send + 'static,
+    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
 {
-    from_db: Arc<dyn Fn(DbValue) -> Value + Sync + Send + 'static>,
     values: Vec<Value>,
-    query_carrier: QueryCarrier<Database, DbValue>,
-    execute_carrier: ExecuteCarrier<Database>,
+    query_carrier: QueryCarrier<DB, DbValue>,
+    execute_carrier: ExecuteCarrier<DB>,
 }
 
-impl<Value, DbValue, Database> ProjectingContainer<Value, DbValue, Database>
+impl<Value, DbValue, DB> ProjectingContainer<Value, DbValue, DB>
 where
-    Database: ManageConnection + 'static,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
     Value: Send + 'static,
-    DbValue: Send + 'static,
+    for<'row> DbValue:
+        FromRow<'row, DB::Row> + FromEntity<Value> + ToEntity<Value> + Send + 'static,
 {
     pub(crate) fn from_carriers(
-        from_db: Arc<dyn Fn(DbValue) -> Value + Sync + Send + 'static>,
-        query_carrier: QueryCarrier<Database, DbValue>,
-        execute_carrier: ExecuteCarrier<Database>,
+        query_carrier: QueryCarrier<DB, DbValue>,
+        execute_carrier: ExecuteCarrier<DB>,
     ) -> Self {
         Self {
-            from_db,
             values: vec![],
             query_carrier,
             execute_carrier,
         }
     }
 
-    pub fn builder(&self) -> ContainerBuilder<Database> {
+    pub fn builder(&self) -> ContainerBuilder<DB> {
         self.query_carrier.builder()
     }
 
@@ -60,7 +52,7 @@ where
         if let Some(result) = self.query_carrier.try_resolve_query() {
             match result {
                 Ok(values) => {
-                    self.values = values.into_iter().map(|val| (self.from_db)(val)).collect();
+                    self.values = values.into_iter().map(ToEntity::to_entity).collect();
                 }
                 Err(error) => error!("{error}"),
             }
@@ -72,40 +64,36 @@ where
         self.query_carrier.should_refresh()
     }
 
-    pub fn query<Query>(&mut self, query_fn: impl FnOnce() -> Query + Send + 'static)
+    pub fn query<BuildFn>(&mut self, create_query: BuildFn)
     where
-        for<'query> Query: RunQueryDsl<Database::Connection>
-            + QueryFragment<<Database::Connection as Connection>::Backend>
-            + LoadQuery<'query, Database::Connection, DbValue>,
+        DbValue: Unpin,
+        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
+        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static,
     {
-        self.query_carrier.query(query_fn);
+        self.query_carrier.query(create_query);
     }
-    pub fn execute<Execute>(&mut self, execute_fn: impl FnOnce() -> Execute + Send + 'static)
+    pub fn execute<BuildFn>(&mut self, create_execute: BuildFn)
     where
-        Execute: RunQueryDsl<Database::Connection>
-            + QueryFragment<<Database::Connection as Connection>::Backend>
-            + ExecuteDsl<Database::Connection>,
+        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
+        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static,
     {
-        self.execute_carrier.execute(execute_fn);
+        self.execute_carrier.execute(create_execute);
     }
 
-    pub fn actor(&self) -> Actor<Database> {
+    pub fn actor(&self) -> Actor<DB> {
         Actor::new(self.execute_carrier.clone())
     }
 }
 
-impl<Value, DbValue, Database> Clone for ProjectingContainer<Value, DbValue, Database>
+impl<Value, DbValue, DB> Clone for ProjectingContainer<Value, DbValue, DB>
 where
-    Database: ManageConnection + 'static,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
     Value: Send + 'static,
-    DbValue: Send + 'static,
+    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
 {
     fn clone(&self) -> Self {
         Self {
-            from_db: Arc::clone(&self.from_db),
             values: vec![],
             query_carrier: self.query_carrier.clone(),
             execute_carrier: self.execute_carrier.clone(),

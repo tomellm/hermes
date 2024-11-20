@@ -1,10 +1,8 @@
-use diesel::{
-    backend::Backend,
-    r2d2::{ManageConnection, Pool},
-    Connection,
-};
+use std::sync::Arc;
+
 use execute::ExecuteCarrier;
 use query::QueryCarrier;
+use sqlx::{Database, Executor, FromRow, Pool};
 use tokio::sync::mpsc;
 
 use crate::messenger::ContainerData;
@@ -12,18 +10,16 @@ use crate::messenger::ContainerData;
 pub mod execute;
 pub mod query;
 
-pub(crate) fn both_carriers<Database, DbValue>(
-    pool: Pool<Database>,
+pub(crate) fn both_carriers<DB, DbValue>(
+    pool: Arc<Pool<DB>>,
     all_tables: Vec<String>,
     tables_changed_sender: mpsc::Sender<Vec<String>>,
     new_register_sender: mpsc::Sender<ContainerData>,
-) -> (QueryCarrier<Database, DbValue>, ExecuteCarrier<Database>)
+) -> (QueryCarrier<DB, DbValue>, ExecuteCarrier<DB>)
 where
-    Database: ManageConnection + 'static,
-    Database::Connection: Connection,
-    <Database::Connection as Connection>::Backend: Default,
-    <<Database::Connection as Connection>::Backend as Backend>::QueryBuilder: Default,
-    DbValue: Send + 'static,
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
+    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
 {
     let query = QueryCarrier::register_new(
         pool.clone(),
