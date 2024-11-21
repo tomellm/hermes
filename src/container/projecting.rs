@@ -1,3 +1,5 @@
+use std::cmp::Ordering;
+
 use sqlx::{Database, Executor, FromRow, IntoArguments, QueryBuilder};
 use sqlx_projector::projectors::{FromEntity, ToEntity};
 use tracing::error;
@@ -7,7 +9,7 @@ use crate::{
     carrier::{execute::ExecuteCarrier, query::QueryCarrier},
 };
 
-use super::ContainerBuilder;
+use super::{data::Data, ContainerBuilder};
 
 pub struct ProjectingContainer<Value, DbValue, DB>
 where
@@ -16,7 +18,7 @@ where
     Value: Send + 'static,
     for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
 {
-    values: Vec<Value>,
+    pub data: Data<Value>,
     query_carrier: QueryCarrier<DB, DbValue>,
     execute_carrier: ExecuteCarrier<DB>,
 }
@@ -25,7 +27,7 @@ impl<Value, DbValue, DB> ProjectingContainer<Value, DbValue, DB>
 where
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-    Value: Send + 'static,
+    Value: Clone + Send + 'static,
     for<'row> DbValue:
         FromRow<'row, DB::Row> + FromEntity<Value> + ToEntity<Value> + Send + 'static,
 {
@@ -34,7 +36,7 @@ where
         execute_carrier: ExecuteCarrier<DB>,
     ) -> Self {
         Self {
-            values: vec![],
+            data: Data::default(),
             query_carrier,
             execute_carrier,
         }
@@ -44,16 +46,14 @@ where
         self.query_carrier.builder()
     }
 
-    pub fn values(&self) -> &Vec<Value> {
-        &self.values
+    pub fn data(&self) -> &Vec<Value> {
+        &self.data.data
     }
 
     pub fn state_update(&mut self) {
         if let Some(result) = self.query_carrier.try_resolve_query() {
             match result {
-                Ok(values) => {
-                    self.values = values.into_iter().map(ToEntity::to_entity).collect();
-                }
+                Ok(values) => self.data.set(values.into_iter().map(ToEntity::to_entity)),
                 Err(error) => error!("{error}"),
             }
         }
@@ -83,6 +83,10 @@ where
     pub fn actor(&self) -> Actor<DB> {
         Actor::new(self.execute_carrier.clone())
     }
+
+    pub fn sort(&mut self, sorting_fn: impl Fn(&Value, &Value) -> Ordering + Send + 'static) {
+        self.data.new_sorting(sorting_fn);
+    }
 }
 
 impl<Value, DbValue, DB> Clone for ProjectingContainer<Value, DbValue, DB>
@@ -94,7 +98,7 @@ where
 {
     fn clone(&self) -> Self {
         Self {
-            values: vec![],
+            data: Data::default(),
             query_carrier: self.query_carrier.clone(),
             execute_carrier: self.execute_carrier.clone(),
         }

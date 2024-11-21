@@ -13,6 +13,7 @@ use crate::{
 
 pub mod projecting;
 pub mod simple;
+pub mod data;
 
 pub struct ContainerBuilder<DB>
 where
@@ -54,7 +55,7 @@ where
 
     pub fn projector<Value, DbValue>(self) -> ProjectingContainer<Value, DbValue, DB>
     where
-        Value: Send + 'static,
+        Value: Clone + Send + 'static,
         for<'row> DbValue:
             FromRow<'row, DB::Row> + FromEntity<Value> + ToEntity<Value> + Send + 'static,
     {
