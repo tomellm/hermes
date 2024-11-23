@@ -1,7 +1,7 @@
-use sqlx::{Database, Executor, FromRow, IntoArguments, QueryBuilder};
+use sqlx::{Database, Executor, FromRow};
 use tracing::error;
 
-use crate::carrier::{execute::ExecuteCarrier, query::QueryCarrier};
+use crate::carrier::{execute::{ExecuteCarrier, GetExecuteCarrier}, query::{GetQueryCarrier, QueryCarrier}};
 
 use super::ContainerBuilder;
 
@@ -53,27 +53,27 @@ where
         self.query_carrier.should_refresh()
     }
 
-    pub fn query<BuildFn>(&mut self, create_query: BuildFn)
-    where
-        Value: Unpin,
-        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
-        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static,
-    {
-        self.query_carrier.query(create_query);
+}
+
+impl<DbValue, DB> GetQueryCarrier<DB, DbValue> for Container<DbValue, DB>
+where
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
+    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
+{
+    fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<DB, DbValue> {
+        &mut self.query_carrier
     }
-    pub fn execute<BuildFn>(&mut self, create_execute: BuildFn)
-    where
-        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
-        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static,
-    {
-        self.execute_carrier.execute(create_execute);
-    }
-    pub fn execute_many<'builder, Builders>(&mut self, executes: Builders)
-    where
-        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
-        Builders: Iterator<Item = QueryBuilder<'builder, DB>> + Send + 'static,
-    {
-        self.execute_carrier.execute_many(executes);
+}
+
+impl<DbValue, DB> GetExecuteCarrier<DB> for Container<DbValue, DB>
+where
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
+    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
+{
+    fn ref_mut_execute_carrier(&mut self) -> &mut ExecuteCarrier<DB> {
+        &mut self.execute_carrier
     }
 }
 

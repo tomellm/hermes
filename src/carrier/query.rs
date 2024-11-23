@@ -1,9 +1,7 @@
-use std::
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    }
-;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 use sqlx::{Database, Execute, Executor, FromRow, IntoArguments, Pool, QueryBuilder};
 use sqlx_projector::builder;
@@ -187,4 +185,41 @@ where
             values,
         }
     }
+}
+
+pub trait ImplQueryCarrier<DB, DbValue>
+where
+    DB: Database,
+{
+    fn query<BuildFn>(&mut self, create_query: BuildFn)
+    where
+        DbValue: Unpin,
+        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
+        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static;
+}
+
+impl<T, DB, DbValue> ImplQueryCarrier<DB, DbValue> for T
+where
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
+    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
+    T: GetQueryCarrier<DB, DbValue>
+{
+    fn query<BuildFn>(&mut self, create_query: BuildFn)
+    where
+        DbValue: Unpin,
+        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
+        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static,
+    {
+        self.ref_mut_query_carrier().query(create_query);
+    }
+}
+
+pub(crate) trait GetQueryCarrier<DB, DbValue>
+where
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
+    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
+{
+    fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<DB, DbValue>;
 }

@@ -162,3 +162,48 @@ where
 }
 
 type ExecuteResult = Result<Vec<String>, sqlx::error::Error>;
+
+pub trait ImplExecuteCarrier<DB>
+where
+    DB: Database,
+{
+    fn execute<BuildFn>(&mut self, create_execute: BuildFn)
+    where
+        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
+        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static;
+
+    fn execute_many<'builder, Builders>(&mut self, executes: Builders)
+    where
+        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
+        Builders: Iterator<Item = QueryBuilder<'builder, DB>> + Send + 'static;
+}
+
+impl<T, DB> ImplExecuteCarrier<DB> for T
+where
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
+    T: GetExecuteCarrier<DB>,
+{
+    fn execute<BuildFn>(&mut self, create_execute: BuildFn)
+    where
+        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
+        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static,
+    {
+        self.ref_mut_execute_carrier().execute(create_execute);
+    }
+    fn execute_many<'builder, Builders>(&mut self, executes: Builders)
+    where
+        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
+        Builders: Iterator<Item = QueryBuilder<'builder, DB>> + Send + 'static,
+    {
+        self.ref_mut_execute_carrier().execute_many(executes);
+    }
+}
+
+pub(crate) trait GetExecuteCarrier<DB>
+where
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
+{
+    fn ref_mut_execute_carrier(&mut self) -> &mut ExecuteCarrier<DB>;
+}
