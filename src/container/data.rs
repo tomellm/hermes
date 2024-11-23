@@ -20,6 +20,7 @@ impl<Value> Data<Value> {
     pub(crate) fn set(&mut self, new_data: impl Iterator<Item = Value>) {
         self.data.clear();
         self.data.extend(new_data);
+        self.resort();
     }
 
     pub fn sorted(&self) -> Vec<&Value> {

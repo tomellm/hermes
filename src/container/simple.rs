@@ -68,6 +68,13 @@ where
     {
         self.execute_carrier.execute(create_execute);
     }
+    pub fn execute_many<'builder, Builders>(&mut self, executes: Builders)
+    where
+        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
+        Builders: Iterator<Item = QueryBuilder<'builder, DB>> + Send + 'static,
+    {
+        self.execute_carrier.execute_many(executes);
+    }
 }
 
 impl<Value, DB> Clone for Container<Value, DB>

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use sqlx::{Database, Execute, Executor, IntoArguments, Pool, QueryBuilder};
 use sqlx_projector::builder;
@@ -20,7 +20,7 @@ where
 {
     pool: Arc<Pool<DB>>,
     all_tables: Vec<String>,
-    executing_executes: Vec<oneshot::Receiver<ExecutingExecute<DB>>>,
+    executing_executes: Vec<oneshot::Receiver<ExecuteResult>>,
     tables_changed_sender: mpsc::Sender<Vec<String>>,
     new_register_sender: mpsc::Sender<ContainerData>,
 }
@@ -72,10 +72,7 @@ where
     pub fn try_resolve_executes(&mut self) {
         self.executing_executes
             .retain_mut(|execute| match execute.try_recv() {
-                Ok(ExecutingExecute {
-                    affected_tables,
-                    result: Ok(_),
-                }) => {
+                Ok(Ok(affected_tables)) => {
                     let tables = affected_tables.clone();
                     let sender = self.tables_changed_sender.clone();
                     task::spawn(async move {
@@ -83,9 +80,7 @@ where
                     });
                     false
                 }
-                Ok(ExecutingExecute {
-                    result: Err(error), ..
-                }) => {
+                Ok(Err(error)) => {
                     error!("{error}");
                     false
                 }
@@ -109,21 +104,61 @@ where
             let execute = builder.build();
 
             let tables = get_tables_present(all_tables, execute.sql());
-            let query_result = execute.execute(&*pool).await;
-            let _ = sender.send(ExecutingExecute {
-                affected_tables: tables,
-                result: query_result,
-            });
+            let execute_result = match execute.execute(&*pool).await {
+                Ok(_) => Ok(tables),
+                Err(error) => Err(error),
+            };
+            let _ = sender.send(execute_result);
+        });
+
+        self.executing_executes.push(reciever);
+    }
+
+    pub fn execute_many<'builder, Builders>(&mut self, executes: Builders)
+    where
+        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
+        Builders: Iterator<Item = QueryBuilder<'builder, DB>> + Send + 'static,
+    {
+        let all_tables = self.all_tables.clone();
+        let pool = self.pool.clone();
+        let (sender, reciever) = oneshot::channel();
+
+        task::spawn(async move {
+            let mut connection = pool.acquire().await.unwrap();
+
+            sqlx::query("BEGIN TRANSACTION")
+                .execute(&mut *connection)
+                .await
+                .unwrap();
+
+            let mut all_tables_changed = HashSet::new();
+            for mut builder in executes {
+                let execute = builder.build();
+                let tables = get_tables_present(all_tables.clone(), execute.sql());
+                match execute.execute(&mut *connection).await {
+                    Ok(_) => all_tables_changed.extend(tables),
+                    Err(error) => {
+                        sender.send(Err(error)).unwrap();
+                        sqlx::query("ROLLBACK")
+                            .execute(&mut *connection)
+                            .await
+                            .unwrap();
+                        return;
+                    }
+                }
+            }
+            sqlx::query("COMMIT TRANSACTION")
+                .execute(&mut *connection)
+                .await
+                .unwrap();
+
+            sender
+                .send(Ok(all_tables_changed.into_iter().collect::<Vec<_>>()))
+                .unwrap();
         });
 
         self.executing_executes.push(reciever);
     }
 }
 
-struct ExecutingExecute<DB>
-where
-    DB: Database,
-{
-    affected_tables: Vec<String>,
-    result: sqlx::Result<DB::QueryResult>,
-}
+type ExecuteResult = Result<Vec<String>, sqlx::error::Error>;
