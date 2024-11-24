@@ -5,7 +5,7 @@ use permutation::Permutation;
 pub struct Data<Value> {
     pub(crate) data: Vec<Value>,
     sorting: Option<DataSorting<Value>>,
-    has_changed: bool
+    has_changed: bool,
 }
 
 impl<Value> Default for Data<Value> {
@@ -13,7 +13,7 @@ impl<Value> Default for Data<Value> {
         Self {
             data: vec![],
             sorting: None,
-            has_changed: true
+            has_changed: true,
         }
     }
 }
@@ -74,19 +74,26 @@ impl<Value> DataSorting<Value> {
 
 type SortingFn<Value> = Box<dyn Fn(&Value, &Value) -> Ordering + Send + 'static>;
 
-
 pub trait ImplData<Value> {
     fn data(&self) -> &Vec<Value>;
+    fn sort(&mut self, sorting_fn: impl Fn(&Value, &Value) -> Ordering + Send + 'static);
+    fn sorted(&self) -> Vec<&Value>;
     fn has_changed(&self) -> bool;
     fn set_viewed(&mut self) -> &mut Self;
 }
 
-impl<T, Value> ImplData<Value> for T 
+impl<T, Value> ImplData<Value> for T
 where
-    T: HasData<Value>
+    T: HasData<Value>,
 {
     fn data(&self) -> &Vec<Value> {
         &self.ref_data().data
+    }
+    fn sort(&mut self, sorting_fn: impl Fn(&Value, &Value) -> Ordering + Send + 'static) {
+        self.ref_mut_data().new_sorting(sorting_fn);
+    }
+    fn sorted(&self) -> Vec<&Value> {
+        self.ref_data().sorted()
     }
     fn has_changed(&self) -> bool {
         self.ref_data().has_changed

@@ -1,15 +1,10 @@
-use std::cmp::Ordering;
-
 use sqlx::{Database, Executor, FromRow};
 use sqlx_projector::projectors::{FromEntity, ToEntity};
 use tracing::error;
 
-use crate::{
-    actor::Actor,
-    carrier::{
-        execute::{ExecuteCarrier, HasExecuteCarrier},
-        query::{HasQueryCarrier, QueryCarrier},
-    },
+use crate::carrier::{
+    execute::{ExecuteCarrier, HasExecuteCarrier},
+    query::{HasQueryCarrier, QueryCarrier},
 };
 
 use super::{
@@ -61,18 +56,6 @@ where
         }
         self.execute_carrier.try_resolve_executes();
     }
-
-    pub fn should_refresh(&self) -> bool {
-        self.query_carrier.should_refresh()
-    }
-
-    pub fn actor(&self) -> Actor<DB> {
-        Actor::new(self.execute_carrier.clone())
-    }
-
-    pub fn sort(&mut self, sorting_fn: impl Fn(&Value, &Value) -> Ordering + Send + 'static) {
-        self.data.new_sorting(sorting_fn);
-    }
 }
 
 impl<Value, DbValue, DB> HasQueryCarrier<DB, DbValue> for ProjectingContainer<Value, DbValue, DB>
@@ -82,6 +65,9 @@ where
     for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
     Value: Send,
 {
+    fn ref_query_carrier(&self) -> &QueryCarrier<DB, DbValue> {
+        &self.query_carrier
+    }
     fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<DB, DbValue> {
         &mut self.query_carrier
     }
@@ -94,6 +80,9 @@ where
     for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
     Value: Send,
 {
+    fn ref_execute_carrier(&self) -> &ExecuteCarrier<DB> {
+        &self.execute_carrier
+    }
     fn ref_mut_execute_carrier(&mut self) -> &mut ExecuteCarrier<DB> {
         &mut self.execute_carrier
     }

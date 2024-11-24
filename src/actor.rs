@@ -25,6 +25,9 @@ where
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
 {
+    fn ref_execute_carrier(&self) -> &ExecuteCarrier<DB> {
+        &self.executor
+    }
     fn ref_mut_execute_carrier(&mut self) -> &mut ExecuteCarrier<DB> {
         &mut self.executor
     }

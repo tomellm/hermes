@@ -11,7 +11,7 @@ use tokio::{
 };
 use tracing::error;
 
-use crate::{get_tables_present, messenger::ContainerData};
+use crate::{actor::Actor, get_tables_present, messenger::ContainerData};
 
 pub(crate) struct ExecuteCarrier<DB>
 where
@@ -166,7 +166,9 @@ type ExecuteResult = Result<Vec<String>, sqlx::error::Error>;
 pub trait ImplExecuteCarrier<DB>
 where
     DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
 {
+    fn actor(&self) -> Actor<DB>;
     fn execute<BuildFn>(&mut self, create_execute: BuildFn)
     where
         for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
@@ -184,6 +186,9 @@ where
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
     T: HasExecuteCarrier<DB>,
 {
+    fn actor(&self) -> Actor<DB> {
+        Actor::new(self.ref_execute_carrier().clone())
+    }
     fn execute<BuildFn>(&mut self, create_execute: BuildFn)
     where
         for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
@@ -205,5 +210,6 @@ where
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
 {
+    fn ref_execute_carrier(&self) -> &ExecuteCarrier<DB>;
     fn ref_mut_execute_carrier(&mut self) -> &mut ExecuteCarrier<DB>;
 }

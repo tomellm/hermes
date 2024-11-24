@@ -191,6 +191,7 @@ pub trait ImplQueryCarrier<DB, DbValue>
 where
     DB: Database,
 {
+    fn should_refresh(&self) -> bool;
     fn query<BuildFn>(&mut self, create_query: BuildFn)
     where
         DbValue: Unpin,
@@ -205,6 +206,9 @@ where
     for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
     T: HasQueryCarrier<DB, DbValue>
 {
+    fn should_refresh(&self) -> bool {
+        self.ref_query_carrier().should_refresh()
+    }
     fn query<BuildFn>(&mut self, create_query: BuildFn)
     where
         DbValue: Unpin,
@@ -221,5 +225,6 @@ where
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
     for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
 {
+    fn ref_query_carrier(&self) -> &QueryCarrier<DB, DbValue>;
     fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<DB, DbValue>;
 }

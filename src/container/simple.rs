@@ -61,6 +61,9 @@ where
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
     for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
 {
+    fn ref_query_carrier(&self) -> &QueryCarrier<DB, DbValue> {
+        &self.query_carrier
+    }
     fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<DB, DbValue> {
         &mut self.query_carrier
     }
@@ -72,6 +75,9 @@ where
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
     for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
 {
+    fn ref_execute_carrier(&self) -> &ExecuteCarrier<DB> {
+        &self.execute_carrier
+    }
     fn ref_mut_execute_carrier(&mut self) -> &mut ExecuteCarrier<DB> {
         &mut self.execute_carrier
     }
