@@ -7,12 +7,15 @@ use tracing::error;
 use crate::{
     actor::Actor,
     carrier::{
-        execute::{ExecuteCarrier, GetExecuteCarrier},
-        query::{GetQueryCarrier, QueryCarrier},
+        execute::{ExecuteCarrier, HasExecuteCarrier},
+        query::{HasQueryCarrier, QueryCarrier},
     },
 };
 
-use super::{data::Data, ContainerBuilder};
+use super::{
+    data::{Data, HasData},
+    ContainerBuilder,
+};
 
 pub struct ProjectingContainer<Value, DbValue, DB>
 where
@@ -49,10 +52,6 @@ where
         self.query_carrier.builder()
     }
 
-    pub fn data(&self) -> &Vec<Value> {
-        &self.data.data
-    }
-
     pub fn state_update(&mut self) {
         if let Some(result) = self.query_carrier.try_resolve_query() {
             match result {
@@ -76,7 +75,7 @@ where
     }
 }
 
-impl<Value, DbValue, DB> GetQueryCarrier<DB, DbValue> for ProjectingContainer<Value, DbValue, DB>
+impl<Value, DbValue, DB> HasQueryCarrier<DB, DbValue> for ProjectingContainer<Value, DbValue, DB>
 where
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
@@ -88,7 +87,7 @@ where
     }
 }
 
-impl<Value, DbValue, DB> GetExecuteCarrier<DB> for ProjectingContainer<Value, DbValue, DB>
+impl<Value, DbValue, DB> HasExecuteCarrier<DB> for ProjectingContainer<Value, DbValue, DB>
 where
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
@@ -97,6 +96,21 @@ where
 {
     fn ref_mut_execute_carrier(&mut self) -> &mut ExecuteCarrier<DB> {
         &mut self.execute_carrier
+    }
+}
+
+impl<Value, DbValue, DB> HasData<Value> for ProjectingContainer<Value, DbValue, DB>
+where
+    DB: Database,
+    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
+    Value: Send + 'static,
+    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
+{
+    fn ref_data(&self) -> &Data<Value> {
+        &self.data
+    }
+    fn ref_mut_data(&mut self) -> &mut Data<Value> {
+        &mut self.data
     }
 }
 

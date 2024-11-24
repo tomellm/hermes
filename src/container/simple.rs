@@ -1,7 +1,7 @@
 use sqlx::{Database, Executor, FromRow};
 use tracing::error;
 
-use crate::carrier::{execute::{ExecuteCarrier, GetExecuteCarrier}, query::{GetQueryCarrier, QueryCarrier}};
+use crate::carrier::{execute::{ExecuteCarrier, HasExecuteCarrier}, query::{HasQueryCarrier, QueryCarrier}};
 
 use super::ContainerBuilder;
 
@@ -55,7 +55,7 @@ where
 
 }
 
-impl<DbValue, DB> GetQueryCarrier<DB, DbValue> for Container<DbValue, DB>
+impl<DbValue, DB> HasQueryCarrier<DB, DbValue> for Container<DbValue, DB>
 where
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
@@ -66,7 +66,7 @@ where
     }
 }
 
-impl<DbValue, DB> GetExecuteCarrier<DB> for Container<DbValue, DB>
+impl<DbValue, DB> HasExecuteCarrier<DB> for Container<DbValue, DB>
 where
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,

@@ -182,7 +182,7 @@ impl<T, DB> ImplExecuteCarrier<DB> for T
 where
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-    T: GetExecuteCarrier<DB>,
+    T: HasExecuteCarrier<DB>,
 {
     fn execute<BuildFn>(&mut self, create_execute: BuildFn)
     where
@@ -200,7 +200,7 @@ where
     }
 }
 
-pub(crate) trait GetExecuteCarrier<DB>
+pub(crate) trait HasExecuteCarrier<DB>
 where
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,

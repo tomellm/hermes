@@ -110,7 +110,7 @@ where
             Ok(result) => {
                 if let ExecutingQuery {
                     interested_tables,
-                    values: Ok(_),
+                    query_result: Ok(_),
                 } = result
                 {
                     self.interesting_tables = interested_tables.clone();
@@ -118,8 +118,8 @@ where
                     task::spawn(async move {
                         let _ = sender.send(interested_tables).await;
                     });
-                }
-                Some(result.values)
+                } 
+                Some(result.query_result)
             }
             Err(TryRecvError::Closed) => None,
             Err(TryRecvError::Empty) => {
@@ -172,7 +172,7 @@ where
     DbValue: Send + 'static,
 {
     interested_tables: Vec<String>,
-    values: sqlx::Result<Vec<DbValue>>,
+    query_result: sqlx::Result<Vec<DbValue>>,
 }
 
 impl<DbValue> ExecutingQuery<DbValue>
@@ -182,7 +182,7 @@ where
     fn new(interested_tables: Vec<String>, values: sqlx::Result<Vec<DbValue>>) -> Self {
         Self {
             interested_tables,
-            values,
+            query_result: values,
         }
     }
 }
@@ -203,7 +203,7 @@ where
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
     for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
-    T: GetQueryCarrier<DB, DbValue>
+    T: HasQueryCarrier<DB, DbValue>
 {
     fn query<BuildFn>(&mut self, create_query: BuildFn)
     where
@@ -215,7 +215,7 @@ where
     }
 }
 
-pub(crate) trait GetQueryCarrier<DB, DbValue>
+pub(crate) trait HasQueryCarrier<DB, DbValue>
 where
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,

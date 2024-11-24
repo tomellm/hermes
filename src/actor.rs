@@ -1,6 +1,6 @@
 use sqlx::{Database, Executor};
 
-use crate::carrier::execute::{ExecuteCarrier, GetExecuteCarrier};
+use crate::carrier::execute::{ExecuteCarrier, HasExecuteCarrier};
 
 pub struct Actor<DB>
 where
@@ -20,7 +20,7 @@ where
     }
 }
 
-impl<DB> GetExecuteCarrier<DB> for Actor<DB>
+impl<DB> HasExecuteCarrier<DB> for Actor<DB>
 where
     DB: Database,
     for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
