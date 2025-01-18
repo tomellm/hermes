@@ -6,13 +6,13 @@ use std::{
     },
 };
 
-use sea_orm::DatabaseConnection;
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 use tokio::sync::mpsc;
 
 use crate::{container::ContainerBuilder, factory::Factory};
 
 pub struct Messenger {
-    pool: DatabaseConnection,
+    db: DatabaseConnection,
     all_tables: Vec<String>,
     tables_changed: mpsc::Receiver<Vec<String>>,
     tables_changed_sender: mpsc::Sender<Vec<String>>,
@@ -22,12 +22,24 @@ pub struct Messenger {
 }
 
 impl Messenger {
-    pub fn new(pool: DatabaseConnection) -> Self {
+    pub async fn new(db: DatabaseConnection) -> Self {
         let (tables_changed_sender, tables_changed) = mpsc::channel(50);
         let (new_register_sender, new_register_reciver) = mpsc::channel(5);
+
+        let all_tables = db
+            .query_all(Statement::from_string(
+                DbBackend::Sqlite,
+                "select name from sqlite_master where type='table';",
+            ))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|result| result.try_get::<String>("", "name").unwrap())
+            .collect();
+
         Self {
-            pool,
-            all_tables: vec![],
+            db,
+            all_tables,
             tables_changed,
             tables_changed_sender,
             container_data: vec![],
@@ -38,7 +50,7 @@ impl Messenger {
 
     pub fn builder(&self) -> ContainerBuilder {
         ContainerBuilder::new(
-            self.pool.clone(),
+            self.db.clone(),
             self.all_tables.clone(),
             self.tables_changed_sender.clone(),
             self.new_register_sender.clone(),
@@ -47,7 +59,7 @@ impl Messenger {
 
     pub fn factory(&self) -> Factory {
         Factory::new(
-            self.pool.clone(),
+            self.db.clone(),
             self.all_tables.clone(),
             self.tables_changed_sender.clone(),
             self.new_register_sender.clone(),

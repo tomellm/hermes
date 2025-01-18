@@ -4,10 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-sqlx = "0.8.2"
 tokio = { version = "1.41.0", features = ["rt", "sync"] }
 tracing = "0.1.40"
-uuid = { version = "1.11.0", features = ["v4"] }
 sqlx_projector = { path = "../sqlx_projector" }
 permutation = "0.4.1"
 sea-query = { version = "0.32.1", features = ["thread-safe", "backend-sqlite", "with-chrono", "with-uuid"] }

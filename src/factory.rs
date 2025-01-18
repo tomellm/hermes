@@ -22,7 +22,7 @@ impl Clone for Factory {
 }
 
 impl Factory {
-    pub fn new(
+    pub(crate) fn new(
         pool: DatabaseConnection,
         all_tables: Vec<String>,
         tables_changed_sender: mpsc::Sender<Vec<String>>,
