@@ -1,34 +1,20 @@
-use sqlx::{Database, Executor};
-
 use crate::carrier::execute::{ExecuteCarrier, HasExecuteCarrier};
 
-pub struct Actor<DB>
-where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-{
-    executor: ExecuteCarrier<DB>,
+pub struct Actor {
+    executor: ExecuteCarrier,
 }
 
-impl<DB> Actor<DB>
-where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-{
-    pub(crate) fn new(executor: ExecuteCarrier<DB>) -> Self {
+impl Actor {
+    pub(crate) fn new(executor: ExecuteCarrier) -> Self {
         Self { executor }
     }
 }
 
-impl<DB> HasExecuteCarrier<DB> for Actor<DB>
-where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-{
-    fn ref_execute_carrier(&self) -> &ExecuteCarrier<DB> {
+impl HasExecuteCarrier for Actor {
+    fn ref_execute_carrier(&self) -> &ExecuteCarrier {
         &self.executor
     }
-    fn ref_mut_execute_carrier(&mut self) -> &mut ExecuteCarrier<DB> {
+    fn ref_mut_execute_carrier(&mut self) -> &mut ExecuteCarrier {
         &mut self.executor
     }
 }

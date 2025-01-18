@@ -1,4 +1,4 @@
-use sqlx::{Database, Executor, FromRow};
+use sea_orm::{EntityTrait, FromQueryResult};
 use sqlx_projector::projectors::{FromEntity, ToEntity};
 use tracing::error;
 
@@ -12,29 +12,24 @@ use super::{
     ContainerBuilder,
 };
 
-pub struct ProjectingContainer<Value, DbValue, DB>
+pub struct ProjectingContainer<Value, DbValue>
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
     Value: Send + 'static,
-    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
+    DbValue: EntityTrait + FromQueryResult + Send + 'static,
 {
     pub data: Data<Value>,
-    query_carrier: QueryCarrier<DB, DbValue>,
-    execute_carrier: ExecuteCarrier<DB>,
+    query_carrier: QueryCarrier<DbValue>,
+    execute_carrier: ExecuteCarrier,
 }
 
-impl<Value, DbValue, DB> ProjectingContainer<Value, DbValue, DB>
+impl<Value, DbValue> ProjectingContainer<Value, DbValue>
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
     Value: Clone + Send + 'static,
-    for<'row> DbValue:
-        FromRow<'row, DB::Row> + FromEntity<Value> + ToEntity<Value> + Send + 'static,
+    DbValue: EntityTrait + FromQueryResult + FromEntity<Value> + ToEntity<Value> + Send + 'static,
 {
     pub(crate) fn from_carriers(
-        query_carrier: QueryCarrier<DB, DbValue>,
-        execute_carrier: ExecuteCarrier<DB>,
+        query_carrier: QueryCarrier<DbValue>,
+        execute_carrier: ExecuteCarrier,
     ) -> Self {
         Self {
             data: Data::default(),
@@ -43,7 +38,7 @@ where
         }
     }
 
-    pub fn builder(&self) -> ContainerBuilder<DB> {
+    pub fn builder(&self) -> ContainerBuilder {
         self.query_carrier.builder()
     }
 
@@ -58,42 +53,36 @@ where
     }
 }
 
-impl<Value, DbValue, DB> HasQueryCarrier<DB, DbValue> for ProjectingContainer<Value, DbValue, DB>
+impl<Value, DbValue> HasQueryCarrier<DbValue> for ProjectingContainer<Value, DbValue>
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
     Value: Send,
+    DbValue: EntityTrait + FromQueryResult + Send + 'static,
 {
-    fn ref_query_carrier(&self) -> &QueryCarrier<DB, DbValue> {
+    fn ref_query_carrier(&self) -> &QueryCarrier<DbValue> {
         &self.query_carrier
     }
-    fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<DB, DbValue> {
+    fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<DbValue> {
         &mut self.query_carrier
     }
 }
 
-impl<Value, DbValue, DB> HasExecuteCarrier<DB> for ProjectingContainer<Value, DbValue, DB>
+impl<Value, DbValue> HasExecuteCarrier for ProjectingContainer<Value, DbValue>
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
     Value: Send,
+    DbValue: EntityTrait + FromQueryResult + Send + 'static,
 {
-    fn ref_execute_carrier(&self) -> &ExecuteCarrier<DB> {
+    fn ref_execute_carrier(&self) -> &ExecuteCarrier {
         &self.execute_carrier
     }
-    fn ref_mut_execute_carrier(&mut self) -> &mut ExecuteCarrier<DB> {
+    fn ref_mut_execute_carrier(&mut self) -> &mut ExecuteCarrier {
         &mut self.execute_carrier
     }
 }
 
-impl<Value, DbValue, DB> HasData<Value> for ProjectingContainer<Value, DbValue, DB>
+impl<Value, DbValue> HasData<Value> for ProjectingContainer<Value, DbValue>
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
     Value: Send + 'static,
-    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
+    DbValue: EntityTrait + FromQueryResult + Send + 'static,
 {
     fn ref_data(&self) -> &Data<Value> {
         &self.data
@@ -103,12 +92,10 @@ where
     }
 }
 
-impl<Value, DbValue, DB> Clone for ProjectingContainer<Value, DbValue, DB>
+impl<Value, DbValue> Clone for ProjectingContainer<Value, DbValue>
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
     Value: Send + 'static,
-    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
+    DbValue: EntityTrait + FromQueryResult + Send + 'static,
 {
     fn clone(&self) -> Self {
         Self {

@@ -6,16 +6,13 @@ use std::{
     },
 };
 
-use sqlx::{Database, Executor, Pool};
+use sea_orm::DatabaseConnection;
 use tokio::sync::mpsc;
 
 use crate::{container::ContainerBuilder, factory::Factory};
 
-pub struct Messenger<DB>
-where
-    DB: Database,
-{
-    pool: Arc<Pool<DB>>,
+pub struct Messenger {
+    pool: DatabaseConnection,
     all_tables: Vec<String>,
     tables_changed: mpsc::Receiver<Vec<String>>,
     tables_changed_sender: mpsc::Sender<Vec<String>>,
@@ -24,12 +21,8 @@ where
     new_register_sender: mpsc::Sender<ContainerData>,
 }
 
-impl<DB> Messenger<DB>
-where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-{
-    pub fn new(pool: Arc<Pool<DB>>) -> Self {
+impl Messenger {
+    pub fn new(pool: DatabaseConnection) -> Self {
         let (tables_changed_sender, tables_changed) = mpsc::channel(50);
         let (new_register_sender, new_register_reciver) = mpsc::channel(5);
         Self {
@@ -43,7 +36,7 @@ where
         }
     }
 
-    pub fn builder(&self) -> ContainerBuilder<DB> {
+    pub fn builder(&self) -> ContainerBuilder {
         ContainerBuilder::new(
             self.pool.clone(),
             self.all_tables.clone(),
@@ -52,7 +45,7 @@ where
         )
     }
 
-    pub fn factory(&self) -> Factory<DB> {
+    pub fn factory(&self) -> Factory {
         Factory::new(
             self.pool.clone(),
             self.all_tables.clone(),

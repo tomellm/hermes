@@ -3,8 +3,8 @@ use std::sync::{
     Arc,
 };
 
-use sqlx::{Database, Execute, Executor, FromRow, IntoArguments, Pool, QueryBuilder};
-use sqlx_projector::builder;
+use sea_orm::{DatabaseConnection, DbErr, EntityTrait, FromQueryResult, QueryTrait, Select};
+use sea_query::SqliteQueryBuilder;
 use tokio::{
     sync::{
         mpsc,
@@ -15,17 +15,15 @@ use tokio::{
 
 use crate::{container::ContainerBuilder, get_tables_present, messenger::ContainerData};
 
-pub struct QueryCarrier<DB, DbValue>
+pub struct QueryCarrier<DbValue>
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
+    DbValue: EntityTrait + FromQueryResult + Send + 'static,
 {
-    pool: Arc<Pool<DB>>,
+    db: DatabaseConnection,
     all_tables: Vec<String>,
 
     interesting_tables: Vec<String>,
-    executing_query: Option<oneshot::Receiver<ExecutingQuery<DbValue>>>,
+    executing_query: Option<oneshot::Receiver<ExecutedQuery<DbValue>>>,
     tables_interested_sender: mpsc::Sender<Vec<String>>,
     should_update: Arc<AtomicBool>,
 
@@ -33,15 +31,13 @@ where
     tables_changed_sender: mpsc::Sender<Vec<String>>,
 }
 
-impl<DB, DbValue> Clone for QueryCarrier<DB, DbValue>
+impl<DbValue> Clone for QueryCarrier<DbValue>
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
+    DbValue: EntityTrait + FromQueryResult + Send + 'static,
 {
     fn clone(&self) -> Self {
         Self::register_new(
-            self.pool.clone(),
+            self.db.clone(),
             self.all_tables.clone(),
             self.tables_changed_sender.clone(),
             self.new_register_sender.clone(),
@@ -49,14 +45,12 @@ where
     }
 }
 
-impl<DB, DbValue> QueryCarrier<DB, DbValue>
+impl<DbValue> QueryCarrier<DbValue>
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-    for<'row> DbValue: FromRow<'row, DB::Row> + Send,
+    DbValue: EntityTrait + FromQueryResult + Send,
 {
     pub fn register_new(
-        pool: Arc<Pool<DB>>,
+        pool: DatabaseConnection,
         all_tables: Vec<String>,
         tables_changed_sender: mpsc::Sender<Vec<String>>,
         new_register_sender: mpsc::Sender<ContainerData>,
@@ -81,7 +75,7 @@ where
     }
 
     fn new(
-        pool: Arc<Pool<DB>>,
+        pool: DatabaseConnection,
         all_tables: Vec<String>,
         tables_interested_sender: mpsc::Sender<Vec<String>>,
         tables_changed_sender: mpsc::Sender<Vec<String>>,
@@ -89,7 +83,7 @@ where
         new_register_sender: mpsc::Sender<ContainerData>,
     ) -> Self {
         Self {
-            pool,
+            db: pool,
             all_tables,
             interesting_tables: vec![],
             executing_query: None,
@@ -104,11 +98,11 @@ where
         self.should_update.load(Ordering::Relaxed)
     }
 
-    pub fn try_resolve_query(&mut self) -> Option<sqlx::Result<Vec<DbValue>>> {
-        let mut executing_query = self.executing_query.take()?;
-        match executing_query.try_recv() {
+    pub fn try_resolve_query(&mut self) -> Option<Result<Vec<DbValue>, DbErr>> {
+        let mut executed_query = Option::take(&mut self.executing_query)?;
+        match executed_query.try_recv() {
             Ok(result) => {
-                if let ExecutingQuery {
+                if let ExecutedQuery {
                     interested_tables,
                     query_result: Ok(_),
                 } = result
@@ -118,48 +112,37 @@ where
                     task::spawn(async move {
                         let _ = sender.send(interested_tables).await;
                     });
-                } 
+                }
                 Some(result.query_result)
             }
             Err(TryRecvError::Closed) => None,
             Err(TryRecvError::Empty) => {
                 #[allow(unused_must_use)]
-                self.executing_query.insert(executing_query);
+                self.executing_query.insert(executed_query);
                 None
             }
         }
     }
 
-    pub fn query<BuildFn>(&mut self, create_query: BuildFn)
-    where
-        DbValue: Unpin,
-        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
-        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static,
-    {
-        let all_tables = self.all_tables.clone();
-        let pool = self.pool.clone();
+    pub fn query(&mut self, mut query: Select<DbValue>) {
+        let db = self.db.clone();
         let (sender, reciever) = oneshot::channel();
+        let tables = get_tables_present(
+            &self.all_tables,
+            &query.query().to_string(SqliteQueryBuilder),
+        );
 
         task::spawn(async move {
-            let mut builder = builder();
-            create_query(&mut builder);
-            let query = builder.build();
-
-            let tables = get_tables_present(all_tables, query.sql());
-
-            let result = query
-                .map(|v| DbValue::from_row(&v).unwrap())
-                .fetch_all(&*pool)
-                .await;
-            let _ = sender.send(ExecutingQuery::new(tables, result));
+            let result = query.into_model::<DbValue>().all(&db).await;
+            let _ = sender.send(ExecutedQuery::new(tables, result));
         });
         #[allow(unused_must_use)]
         self.executing_query.insert(reciever);
     }
 
-    pub fn builder(&self) -> ContainerBuilder<DB> {
+    pub fn builder(&self) -> ContainerBuilder {
         ContainerBuilder::new(
-            self.pool.clone(),
+            self.db.clone(),
             self.all_tables.clone(),
             self.tables_changed_sender.clone(),
             self.new_register_sender.clone(),
@@ -167,19 +150,19 @@ where
     }
 }
 
-struct ExecutingQuery<DbValue>
+struct ExecutedQuery<DbValue>
 where
     DbValue: Send + 'static,
 {
     interested_tables: Vec<String>,
-    query_result: sqlx::Result<Vec<DbValue>>,
+    query_result: Result<Vec<DbValue>, DbErr>,
 }
 
-impl<DbValue> ExecutingQuery<DbValue>
+impl<DbValue> ExecutedQuery<DbValue>
 where
     DbValue: Send + 'static,
 {
-    fn new(interested_tables: Vec<String>, values: sqlx::Result<Vec<DbValue>>) -> Self {
+    fn new(interested_tables: Vec<String>, values: Result<Vec<DbValue>, DbErr>) -> Self {
         Self {
             interested_tables,
             query_result: values,
@@ -187,44 +170,31 @@ where
     }
 }
 
-pub trait ImplQueryCarrier<DB, DbValue>
+pub trait ImplQueryCarrier<DbValue>
 where
-    DB: Database,
+    DbValue: EntityTrait + FromQueryResult + Send + 'static,
 {
     fn should_refresh(&self) -> bool;
-    fn query<BuildFn>(&mut self, create_query: BuildFn)
-    where
-        DbValue: Unpin,
-        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
-        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static;
+    fn query(&mut self, query: Select<DbValue>);
 }
 
-impl<T, DB, DbValue> ImplQueryCarrier<DB, DbValue> for T
+impl<T, DbValue> ImplQueryCarrier<DbValue> for T
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
-    T: HasQueryCarrier<DB, DbValue>
+    T: HasQueryCarrier<DbValue>,
+    DbValue: EntityTrait + FromQueryResult + Send + 'static,
 {
     fn should_refresh(&self) -> bool {
         self.ref_query_carrier().should_refresh()
     }
-    fn query<BuildFn>(&mut self, create_query: BuildFn)
-    where
-        DbValue: Unpin,
-        for<'args, 'intoargs> <DB as Database>::Arguments<'args>: IntoArguments<'intoargs, DB>,
-        for<'builder> BuildFn: Fn(&mut QueryBuilder<'builder, DB>) + Clone + Send + 'static,
-    {
-        self.ref_mut_query_carrier().query(create_query);
+    fn query(&mut self, query: Select<DbValue>) {
+        self.ref_mut_query_carrier().query(query);
     }
 }
 
-pub(crate) trait HasQueryCarrier<DB, DbValue>
+pub(crate) trait HasQueryCarrier<DbValue>
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
+    DbValue: EntityTrait + FromQueryResult + Send + 'static,
 {
-    fn ref_query_carrier(&self) -> &QueryCarrier<DB, DbValue>;
-    fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<DB, DbValue>;
+    fn ref_query_carrier(&self) -> &QueryCarrier<DbValue>;
+    fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<DbValue>;
 }

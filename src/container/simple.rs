@@ -1,30 +1,29 @@
-use sqlx::{Database, Executor, FromRow};
+use sea_orm::{EntityTrait, FromQueryResult};
 use tracing::error;
 
-use crate::carrier::{execute::{ExecuteCarrier, HasExecuteCarrier}, query::{HasQueryCarrier, QueryCarrier}};
+use crate::carrier::{
+    execute::{ExecuteCarrier, HasExecuteCarrier},
+    query::{HasQueryCarrier, QueryCarrier},
+};
 
 use super::ContainerBuilder;
 
-pub struct Container<Value, DB>
+pub struct Container<DbValue>
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-    for<'row> Value: FromRow<'row, DB::Row> + Send + 'static,
+    DbValue: EntityTrait + FromQueryResult + Send + 'static,
 {
-    values: Vec<Value>,
-    query_carrier: QueryCarrier<DB, Value>,
-    execute_carrier: ExecuteCarrier<DB>,
+    values: Vec<DbValue>,
+    query_carrier: QueryCarrier<DbValue>,
+    execute_carrier: ExecuteCarrier,
 }
 
-impl<Value, DB> Container<Value, DB>
+impl<DbValue> Container<DbValue>
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-    for<'row> Value: FromRow<'row, DB::Row> + Send + 'static,
+    DbValue: EntityTrait + FromQueryResult + Send + 'static,
 {
     pub(crate) fn from_carriers(
-        query_carrier: QueryCarrier<DB, Value>,
-        execute_carrier: ExecuteCarrier<DB>,
+        query_carrier: QueryCarrier<DbValue>,
+        execute_carrier: ExecuteCarrier,
     ) -> Self {
         Self {
             values: vec![],
@@ -33,7 +32,7 @@ where
         }
     }
 
-    pub fn builder(&self) -> ContainerBuilder<DB> {
+    pub fn builder(&self) -> ContainerBuilder {
         self.query_carrier.builder()
     }
 
@@ -52,42 +51,35 @@ where
     pub fn should_refresh(&self) -> bool {
         self.query_carrier.should_refresh()
     }
-
 }
 
-impl<DbValue, DB> HasQueryCarrier<DB, DbValue> for Container<DbValue, DB>
+impl<DbValue> HasQueryCarrier<DbValue> for Container<DbValue>
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
+    DbValue: EntityTrait + FromQueryResult + Send + 'static,
 {
-    fn ref_query_carrier(&self) -> &QueryCarrier<DB, DbValue> {
+    fn ref_query_carrier(&self) -> &QueryCarrier<DbValue> {
         &self.query_carrier
     }
-    fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<DB, DbValue> {
+    fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<DbValue> {
         &mut self.query_carrier
     }
 }
 
-impl<DbValue, DB> HasExecuteCarrier<DB> for Container<DbValue, DB>
+impl<DbValue> HasExecuteCarrier for Container<DbValue>
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-    for<'row> DbValue: FromRow<'row, DB::Row> + Send + 'static,
+    DbValue: EntityTrait + FromQueryResult + Send + 'static,
 {
-    fn ref_execute_carrier(&self) -> &ExecuteCarrier<DB> {
+    fn ref_execute_carrier(&self) -> &ExecuteCarrier {
         &self.execute_carrier
     }
-    fn ref_mut_execute_carrier(&mut self) -> &mut ExecuteCarrier<DB> {
+    fn ref_mut_execute_carrier(&mut self) -> &mut ExecuteCarrier {
         &mut self.execute_carrier
     }
 }
 
-impl<Value, DB> Clone for Container<Value, DB>
+impl<Value> Clone for Container<Value>
 where
-    DB: Database,
-    for<'c> &'c mut <DB as Database>::Connection: Executor<'c, Database = DB>,
-    for<'row> Value: FromRow<'row, DB::Row> + Send + 'static,
+    Value: EntityTrait + FromQueryResult + Send + 'static,
 {
     fn clone(&self) -> Self {
         Self {
