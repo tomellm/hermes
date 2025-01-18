@@ -12,6 +12,7 @@ use tokio::{
     },
     task,
 };
+use tracing::info;
 
 use crate::{container::ContainerBuilder, get_tables_present, messenger::ContainerData};
 
@@ -127,10 +128,9 @@ where
     pub fn query(&mut self, mut query: Select<DbValue>) {
         let db = self.db.clone();
         let (sender, reciever) = oneshot::channel();
-        let tables = get_tables_present(
-            &self.all_tables,
-            &query.query().to_string(SqliteQueryBuilder),
-        );
+        let query_string = query.query().to_string(SqliteQueryBuilder);
+        let tables = get_tables_present(&self.all_tables, &query_string);
+        info!(query_string);
 
         task::spawn(async move {
             let result = query.into_model::<DbValue>().all(&db).await;

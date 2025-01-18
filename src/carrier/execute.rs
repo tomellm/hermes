@@ -11,7 +11,7 @@ use tokio::{
     },
     task,
 };
-use tracing::error;
+use tracing::{error, info};
 
 use crate::{actor::Actor, get_tables_present, messenger::ContainerData};
 
@@ -83,7 +83,9 @@ impl ExecuteCarrier {
         let db = self.db.clone();
         let (sender, reciever) = oneshot::channel();
 
-        let tables = get_tables_present(&self.all_tables, &execute.to_string(SqliteQueryBuilder));
+        let execute_string = execute.to_string(SqliteQueryBuilder);
+        let tables = get_tables_present(&self.all_tables, &execute_string);
+        info!(execute_string);
 
         task::spawn(async move {
             let (execute, values) = execute.build(SqliteQueryBuilder);
@@ -169,8 +171,9 @@ impl TransactionExecute {
         execute: impl QueryStatementWriter + Send + 'static,
         all_tables: &[String],
     ) -> Self {
-        let interested_tables =
-            get_tables_present(all_tables, &execute.to_string(SqliteQueryBuilder));
+        let execute_string = execute.to_string(SqliteQueryBuilder);
+        let interested_tables = get_tables_present(all_tables, &execute_string);
+        info!(execute_string);
         let (execute, values) = execute.build(SqliteQueryBuilder);
         Self {
             interested_tables,
