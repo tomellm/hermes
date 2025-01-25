@@ -1,4 +1,4 @@
-use sea_orm::{EntityTrait, FromQueryResult};
+use sea_orm::EntityTrait;
 use tracing::error;
 
 use crate::carrier::{
@@ -10,16 +10,16 @@ use super::ContainerBuilder;
 
 pub struct Container<DbValue>
 where
-    DbValue: EntityTrait + FromQueryResult + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
 {
-    values: Vec<DbValue>,
+    values: Vec<DbValue::Model>,
     query_carrier: QueryCarrier<DbValue>,
     execute_carrier: ExecuteCarrier,
 }
 
 impl<DbValue> Container<DbValue>
 where
-    DbValue: EntityTrait + FromQueryResult + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
 {
     pub(crate) fn from_carriers(
         query_carrier: QueryCarrier<DbValue>,
@@ -55,7 +55,7 @@ where
 
 impl<DbValue> HasQueryCarrier<DbValue> for Container<DbValue>
 where
-    DbValue: EntityTrait + FromQueryResult + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
 {
     fn ref_query_carrier(&self) -> &QueryCarrier<DbValue> {
         &self.query_carrier
@@ -67,7 +67,7 @@ where
 
 impl<DbValue> HasExecuteCarrier for Container<DbValue>
 where
-    DbValue: EntityTrait + FromQueryResult + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
 {
     fn ref_execute_carrier(&self) -> &ExecuteCarrier {
         &self.execute_carrier
@@ -79,7 +79,7 @@ where
 
 impl<Value> Clone for Container<Value>
 where
-    Value: EntityTrait + FromQueryResult + Send + 'static,
+    Value: EntityTrait + Send + 'static,
 {
     fn clone(&self) -> Self {
         Self {

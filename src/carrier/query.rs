@@ -3,7 +3,8 @@ use std::sync::{
     Arc,
 };
 
-use sea_orm::{DatabaseConnection, DbErr, EntityTrait, FromQueryResult, QueryTrait, Select};
+use crate::{container::ContainerBuilder, get_tables_present, messenger::ContainerData};
+use sea_orm::{DatabaseConnection, DbErr, EntityTrait, QueryTrait, Select};
 use sea_query::SqliteQueryBuilder;
 use tokio::{
     sync::{
@@ -12,19 +13,16 @@ use tokio::{
     },
     task,
 };
-use tracing::info;
-
-use crate::{container::ContainerBuilder, get_tables_present, messenger::ContainerData};
 
 pub struct QueryCarrier<DbValue>
 where
-    DbValue: EntityTrait + FromQueryResult + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
 {
     db: DatabaseConnection,
     all_tables: Vec<String>,
 
     interesting_tables: Vec<String>,
-    executing_query: Option<oneshot::Receiver<ExecutedQuery<DbValue>>>,
+    executing_query: Option<oneshot::Receiver<ExecutedQuery<DbValue::Model>>>,
     tables_interested_sender: mpsc::Sender<Vec<String>>,
     should_update: Arc<AtomicBool>,
 
@@ -34,7 +32,7 @@ where
 
 impl<DbValue> Clone for QueryCarrier<DbValue>
 where
-    DbValue: EntityTrait + FromQueryResult + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
 {
     fn clone(&self) -> Self {
         Self::register_new(
@@ -48,7 +46,7 @@ where
 
 impl<DbValue> QueryCarrier<DbValue>
 where
-    DbValue: EntityTrait + FromQueryResult + Send,
+    DbValue: EntityTrait + Send,
 {
     pub fn register_new(
         pool: DatabaseConnection,
@@ -99,7 +97,7 @@ where
         self.should_update.load(Ordering::Relaxed)
     }
 
-    pub fn try_resolve_query(&mut self) -> Option<Result<Vec<DbValue>, DbErr>> {
+    pub fn try_resolve_query(&mut self) -> Option<Result<Vec<DbValue::Model>, DbErr>> {
         let mut executed_query = Option::take(&mut self.executing_query)?;
         match executed_query.try_recv() {
             Ok(result) => {
@@ -128,12 +126,13 @@ where
     pub fn query(&mut self, mut query: Select<DbValue>) {
         let db = self.db.clone();
         let (sender, reciever) = oneshot::channel();
-        let query_string = query.query().to_string(SqliteQueryBuilder);
-        let tables = get_tables_present(&self.all_tables, &query_string);
-        info!(query_string);
+        let tables = get_tables_present(
+            &self.all_tables,
+            &query.query().to_string(SqliteQueryBuilder),
+        );
 
         task::spawn(async move {
-            let result = query.into_model::<DbValue>().all(&db).await;
+            let result = query.into_model::<DbValue::Model>().all(&db).await;
             let _ = sender.send(ExecutedQuery::new(tables, result));
         });
         #[allow(unused_must_use)]
@@ -172,7 +171,7 @@ where
 
 pub trait ImplQueryCarrier<DbValue>
 where
-    DbValue: EntityTrait + FromQueryResult + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
 {
     fn should_refresh(&self) -> bool;
     fn query(&mut self, query: Select<DbValue>);
@@ -181,7 +180,7 @@ where
 impl<T, DbValue> ImplQueryCarrier<DbValue> for T
 where
     T: HasQueryCarrier<DbValue>,
-    DbValue: EntityTrait + FromQueryResult + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
 {
     fn should_refresh(&self) -> bool {
         self.ref_query_carrier().should_refresh()
@@ -193,7 +192,7 @@ where
 
 pub(crate) trait HasQueryCarrier<DbValue>
 where
-    DbValue: EntityTrait + FromQueryResult + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
 {
     fn ref_query_carrier(&self) -> &QueryCarrier<DbValue>;
     fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<DbValue>;

@@ -1,4 +1,4 @@
-use sea_orm::{EntityTrait, FromQueryResult};
+use sea_orm::EntityTrait;
 use sqlx_projector::projectors::{FromEntity, ToEntity};
 use tracing::error;
 
@@ -15,7 +15,8 @@ use super::{
 pub struct ProjectingContainer<Value, DbValue>
 where
     Value: Send + 'static,
-    DbValue: EntityTrait + FromQueryResult + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
+    <DbValue as EntityTrait>::Model: FromEntity<Value> + ToEntity<Value>,
 {
     pub data: Data<Value>,
     query_carrier: QueryCarrier<DbValue>,
@@ -25,7 +26,8 @@ where
 impl<Value, DbValue> ProjectingContainer<Value, DbValue>
 where
     Value: Clone + Send + 'static,
-    DbValue: EntityTrait + FromQueryResult + FromEntity<Value> + ToEntity<Value> + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
+    <DbValue as EntityTrait>::Model: FromEntity<Value> + ToEntity<Value>,
 {
     pub(crate) fn from_carriers(
         query_carrier: QueryCarrier<DbValue>,
@@ -56,7 +58,8 @@ where
 impl<Value, DbValue> HasQueryCarrier<DbValue> for ProjectingContainer<Value, DbValue>
 where
     Value: Send,
-    DbValue: EntityTrait + FromQueryResult + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
+    <DbValue as EntityTrait>::Model: FromEntity<Value> + ToEntity<Value>,
 {
     fn ref_query_carrier(&self) -> &QueryCarrier<DbValue> {
         &self.query_carrier
@@ -69,7 +72,8 @@ where
 impl<Value, DbValue> HasExecuteCarrier for ProjectingContainer<Value, DbValue>
 where
     Value: Send,
-    DbValue: EntityTrait + FromQueryResult + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
+    <DbValue as EntityTrait>::Model: FromEntity<Value> + ToEntity<Value>,
 {
     fn ref_execute_carrier(&self) -> &ExecuteCarrier {
         &self.execute_carrier
@@ -82,7 +86,8 @@ where
 impl<Value, DbValue> HasData<Value> for ProjectingContainer<Value, DbValue>
 where
     Value: Send + 'static,
-    DbValue: EntityTrait + FromQueryResult + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
+    <DbValue as EntityTrait>::Model: FromEntity<Value> + ToEntity<Value>,
 {
     fn ref_data(&self) -> &Data<Value> {
         &self.data
@@ -95,7 +100,8 @@ where
 impl<Value, DbValue> Clone for ProjectingContainer<Value, DbValue>
 where
     Value: Send + 'static,
-    DbValue: EntityTrait + FromQueryResult + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
+    <DbValue as EntityTrait>::Model: FromEntity<Value> + ToEntity<Value>,
 {
     fn clone(&self) -> Self {
         Self {

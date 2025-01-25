@@ -1,9 +1,8 @@
 use std::collections::HashSet;
 
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DbBackend, DbErr, Statement, TransactionTrait, Values,
+    ConnectionTrait, DatabaseConnection, DbBackend, DbErr, QueryTrait, Statement, TransactionTrait,
 };
-use sea_query::{QueryStatementWriter, SqliteQueryBuilder};
 use tokio::{
     sync::{
         mpsc,
@@ -11,7 +10,7 @@ use tokio::{
     },
     task,
 };
-use tracing::{error, info};
+use tracing::error;
 
 use crate::{actor::Actor, get_tables_present, messenger::ContainerData};
 
@@ -79,31 +78,22 @@ impl ExecuteCarrier {
             });
     }
 
-    pub fn execute(&mut self, execute: impl QueryStatementWriter + Send + 'static) {
+    pub fn execute(&mut self, execute: impl QueryTrait + Send + 'static) {
         let db = self.db.clone();
         let (sender, reciever) = oneshot::channel();
 
-        let execute_string = execute.to_string(SqliteQueryBuilder);
-        let tables = get_tables_present(&self.all_tables, &execute_string);
-        info!(execute_string);
+        let execute = execute.build(DbBackend::Sqlite);
+        let tables = get_tables_present(&self.all_tables, &execute.to_string());
 
         task::spawn(async move {
-            let (execute, values) = execute.build(SqliteQueryBuilder);
-            let result = db
-                .execute(Statement::from_sql_and_values(
-                    DbBackend::Sqlite,
-                    execute,
-                    values,
-                ))
-                .await
-                .map(|_| tables);
+            let result = db.execute(execute).await.map(|_| tables);
             let _ = sender.send(result);
         });
 
         self.executing_executes.push(reciever);
     }
 
-    pub fn execute_many(&mut self, transaction_builder: impl Fn(&mut TransactionBuilder)) {
+    pub fn execute_many(&mut self, transaction_builder: impl FnOnce(&mut TransactionBuilder)) {
         let db = self.db.clone();
         let (sender, reciever) = oneshot::channel();
 
@@ -119,15 +109,9 @@ impl ExecuteCarrier {
                 for TransactionExecute {
                     interested_tables,
                     execute,
-                    parameters,
                 } in executes
                 {
-                    txn.execute(Statement::from_sql_and_values(
-                        DbBackend::Sqlite,
-                        execute,
-                        parameters,
-                    ))
-                    .await?;
+                    txn.execute(execute).await?;
                     tables.extend(interested_tables);
                 }
                 txn.commit().await?;
@@ -153,7 +137,7 @@ impl<'executor> TransactionBuilder<'executor> {
         }
     }
 
-    pub fn execute(&mut self, execute: impl QueryStatementWriter + Send + 'static) -> &mut Self {
+    pub fn execute(&mut self, execute: impl QueryTrait + Send + 'static) -> &mut Self {
         let transaction_execute = TransactionExecute::from_execute(execute, self.all_tables);
         self.executes.push(transaction_execute);
         self
@@ -162,23 +146,16 @@ impl<'executor> TransactionBuilder<'executor> {
 
 struct TransactionExecute {
     interested_tables: Vec<String>,
-    execute: String,
-    parameters: Values,
+    execute: Statement,
 }
 
 impl TransactionExecute {
-    pub fn from_execute(
-        execute: impl QueryStatementWriter + Send + 'static,
-        all_tables: &[String],
-    ) -> Self {
-        let execute_string = execute.to_string(SqliteQueryBuilder);
-        let interested_tables = get_tables_present(all_tables, &execute_string);
-        info!(execute_string);
-        let (execute, values) = execute.build(SqliteQueryBuilder);
+    pub fn from_execute(execute: impl QueryTrait + Send + 'static, all_tables: &[String]) -> Self {
+        let execute = execute.build(DbBackend::Sqlite);
+        let interested_tables = get_tables_present(all_tables, &execute.to_string());
         Self {
             interested_tables,
             execute,
-            parameters: values,
         }
     }
 }
@@ -187,8 +164,8 @@ type ExecuteResult = Result<Vec<String>, DbErr>;
 
 pub trait ImplExecuteCarrier {
     fn actor(&self) -> Actor;
-    fn execute(&mut self, execute: impl QueryStatementWriter + Send + 'static);
-    fn execute_many(&mut self, transaction_builder: impl Fn(&mut TransactionBuilder));
+    fn execute(&mut self, execute: impl QueryTrait + Send + 'static);
+    fn execute_many(&mut self, transaction_builder: impl FnOnce(&mut TransactionBuilder));
 }
 
 impl<T> ImplExecuteCarrier for T
@@ -198,10 +175,10 @@ where
     fn actor(&self) -> Actor {
         Actor::new(self.ref_execute_carrier().clone())
     }
-    fn execute(&mut self, create_execute: impl QueryStatementWriter + Send + 'static) {
+    fn execute(&mut self, create_execute: impl QueryTrait + Send + 'static) {
         self.ref_mut_execute_carrier().execute(create_execute);
     }
-    fn execute_many(&mut self, transaction_builder: impl Fn(&mut TransactionBuilder)) {
+    fn execute_many(&mut self, transaction_builder: impl FnOnce(&mut TransactionBuilder)) {
         self.ref_mut_execute_carrier()
             .execute_many(transaction_builder);
     }

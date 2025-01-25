@@ -1,6 +1,6 @@
 use execute::ExecuteCarrier;
 use query::QueryCarrier;
-use sea_orm::{DatabaseConnection, EntityTrait, FromQueryResult};
+use sea_orm::{DatabaseConnection, EntityTrait};
 use tokio::sync::mpsc;
 
 use crate::messenger::ContainerData;
@@ -15,7 +15,7 @@ pub(crate) fn both_carriers<DbValue>(
     new_register_sender: mpsc::Sender<ContainerData>,
 ) -> (QueryCarrier<DbValue>, ExecuteCarrier)
 where
-    for<'row> DbValue: EntityTrait + FromQueryResult + Send + 'static,
+    DbValue: EntityTrait + Send + 'static,
 {
     let query = QueryCarrier::register_new(
         pool.clone(),

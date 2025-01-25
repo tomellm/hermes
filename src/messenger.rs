@@ -6,10 +6,9 @@ use std::{
     },
 };
 
+use crate::{container::ContainerBuilder, factory::Factory};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 use tokio::sync::mpsc;
-
-use crate::{container::ContainerBuilder, factory::Factory};
 
 pub struct Messenger {
     db: DatabaseConnection,

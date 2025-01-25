@@ -1,5 +1,5 @@
 use projecting::ProjectingContainer;
-use sea_orm::{DatabaseConnection, EntityTrait, FromQueryResult};
+use sea_orm::{DatabaseConnection, EntityTrait};
 use simple::Container;
 use sqlx_projector::projectors::{FromEntity, ToEntity};
 use tokio::sync::mpsc;
@@ -37,7 +37,7 @@ impl ContainerBuilder {
 
     pub fn simple<DbValue>(self) -> Container<DbValue>
     where
-        for<'row> DbValue: EntityTrait + FromQueryResult + Send + 'static,
+        DbValue: EntityTrait + Send + 'static,
     {
         let (query, execute) = self.new_carriers();
         Container::from_carriers(query, execute)
@@ -46,8 +46,8 @@ impl ContainerBuilder {
     pub fn projector<Value, DbValue>(self) -> ProjectingContainer<Value, DbValue>
     where
         Value: Clone + Send + 'static,
-        for<'row> DbValue:
-            EntityTrait + FromQueryResult + FromEntity<Value> + ToEntity<Value> + Send + 'static,
+        DbValue: EntityTrait + Send + 'static,
+        <DbValue as EntityTrait>::Model: FromEntity<Value> + ToEntity<Value>,
     {
         let (query, execute) = self.new_carriers();
         ProjectingContainer::from_carriers(query, execute)
@@ -55,7 +55,7 @@ impl ContainerBuilder {
 
     fn new_carriers<DbValue>(&self) -> (QueryCarrier<DbValue>, ExecuteCarrier)
     where
-        for<'row> DbValue: EntityTrait + FromQueryResult + Send + 'static,
+        DbValue: EntityTrait + Send + 'static,
     {
         carrier::both_carriers(
             self.pool.clone(),
