@@ -11,7 +11,17 @@ fn get_tables_present(all_tables: &[String], query: &str) -> Vec<String> {
         .iter()
         .filter_map(|table| query.find(table.as_str()).map(|_| table.clone()))
         .collect::<Vec<_>>();
-    info!(query = query, tables_found = format!("{tables_found:?}"));
+    let query_for_info = query.replace("\"", "");
+    let query_for_info = if query_for_info.len() > 500 {
+        query_for_info[0..500].to_string()
+    } else {
+        query_for_info
+    };
+
+    info!(
+        query = query_for_info,
+        tables_found = format!("{tables_found:?}").replace("\"", "")
+    );
     tables_found
 }
 

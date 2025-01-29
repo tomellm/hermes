@@ -1,10 +1,10 @@
-use sea_orm::EntityTrait;
+use sea_orm::{EntityTrait, Select};
 use sqlx_projector::projectors::{FromEntity, ToEntity};
-use tracing::error;
+use tracing::{error, info};
 
 use crate::carrier::{
     execute::{ExecuteCarrier, HasExecuteCarrier},
-    query::{HasQueryCarrier, QueryCarrier},
+    query::{HasQueryCarrier, ImplQueryCarrier, QueryCarrier},
 };
 
 use super::{
@@ -44,7 +44,7 @@ where
         self.query_carrier.builder()
     }
 
-    pub fn state_update(&mut self) {
+    pub fn state_update(&mut self, redo: bool) {
         if let Some(result) = self.query_carrier.try_resolve_query() {
             match result {
                 Ok(values) => self.data.set(values.into_iter().map(ToEntity::to_entity)),
@@ -52,6 +52,12 @@ where
             }
         }
         self.execute_carrier.try_resolve_executes();
+
+        if redo && self.should_refresh() {
+            if let Some(select) = &self.query_carrier.stored_select {
+                self.query(select.clone());
+            }
+        }
     }
 }
 
@@ -108,6 +114,7 @@ where
             data: Data::default(),
             query_carrier: self.query_carrier.clone(),
             execute_carrier: self.execute_carrier.clone(),
+            stored_select: None,
         }
     }
 }

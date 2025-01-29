@@ -9,12 +9,14 @@ use std::{
 use crate::{container::ContainerBuilder, factory::Factory};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 use tokio::sync::mpsc;
+use tracing::info;
 
 pub struct Messenger {
     db: DatabaseConnection,
     all_tables: Vec<String>,
     tables_changed: mpsc::Receiver<Vec<String>>,
     tables_changed_sender: mpsc::Sender<Vec<String>>,
+
     container_data: Vec<ContainerData>,
     new_register_reciver: mpsc::Receiver<ContainerData>,
     new_register_sender: mpsc::Sender<ContainerData>,
@@ -33,7 +35,10 @@ impl Messenger {
             .await
             .unwrap()
             .into_iter()
-            .map(|result| result.try_get::<String>("", "name").unwrap())
+            .map(|result| {
+                let cell = result.try_get::<String>("", "name").unwrap();
+                format!("\"{cell}\"")
+            })
             .collect();
 
         Self {
@@ -77,7 +82,7 @@ impl Messenger {
         let changed_tables = changed_tables.into_iter().collect::<Vec<_>>();
         self.container_data
             .iter_mut()
-            .filter(|container| container.interested(changed_tables.as_slice()))
+            .filter(|container| container.is_interested(changed_tables.as_slice()))
             .for_each(ContainerData::should_update);
 
         while let Ok(data) = self.new_register_reciver.try_recv() {
@@ -104,16 +109,21 @@ impl ContainerData {
         }
     }
 
+    /// Try and recive new updates to the tables the Container is interested in
     fn try_recv_and_update(&mut self) {
         if let Ok(tables) = self.update_reciver.try_recv() {
             self.tables_interested = tables;
         }
     }
-    fn interested(&self, tables: &[String]) -> bool {
+
+    /// Ask if this container is interested in the passed Tables
+    fn is_interested(&self, tables: &[String]) -> bool {
         tables
             .iter()
             .any(|table| self.tables_interested.contains(table))
     }
+
+    /// Tells the container to query again since the values might have changed
     fn should_update(&mut self) {
         self.should_update.store(true, Ordering::Relaxed);
     }

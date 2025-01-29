@@ -28,6 +28,8 @@ where
 
     new_register_sender: mpsc::Sender<ContainerData>,
     tables_changed_sender: mpsc::Sender<Vec<String>>,
+
+    pub(crate) stored_select: Option<Select<DbValue>>,
 }
 
 impl<DbValue> Clone for QueryCarrier<DbValue>
@@ -90,6 +92,7 @@ where
             tables_changed_sender,
             should_update,
             new_register_sender,
+            stored_select: None,
         }
     }
 
@@ -130,13 +133,21 @@ where
             &self.all_tables,
             &query.query().to_string(SqliteQueryBuilder),
         );
+        let should_update = self.should_update.clone();
 
         task::spawn(async move {
             let result = query.into_model::<DbValue::Model>().all(&db).await;
+            should_update.store(false, Ordering::Relaxed);
             let _ = sender.send(ExecutedQuery::new(tables, result));
         });
         #[allow(unused_must_use)]
         self.executing_query.insert(reciever);
+    }
+
+    /// Does the action once and then stores it internally to redo later
+    pub fn stored_query(&mut self, query: Select<DbValue>) {
+        self.query(query.clone());
+        let _ = self.stored_select.insert(query);
     }
 
     pub fn builder(&self) -> ContainerBuilder {
@@ -175,6 +186,7 @@ where
 {
     fn should_refresh(&self) -> bool;
     fn query(&mut self, query: Select<DbValue>);
+    fn stored_query(&mut self, query: Select<DbValue>);
 }
 
 impl<T, DbValue> ImplQueryCarrier<DbValue> for T
@@ -187,6 +199,9 @@ where
     }
     fn query(&mut self, query: Select<DbValue>) {
         self.ref_mut_query_carrier().query(query);
+    }
+    fn stored_query(&mut self, query: Select<DbValue>) {
+        self.ref_mut_query_carrier().stored_query(query);
     }
 }
 
