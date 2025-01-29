@@ -114,7 +114,6 @@ where
             data: Data::default(),
             query_carrier: self.query_carrier.clone(),
             execute_carrier: self.execute_carrier.clone(),
-            stored_select: None,
         }
     }
 }
