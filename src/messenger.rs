@@ -1,15 +1,9 @@
-use std::{
-    collections::HashSet,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+use std::collections::HashSet;
 
 use crate::{container::ContainerBuilder, factory::Factory};
+use chrono::{DateTime, FixedOffset, Local};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
-use tokio::sync::mpsc;
-use tracing::info;
+use tokio::sync::mpsc::{self};
 
 pub struct Messenger {
     db: DatabaseConnection,
@@ -94,18 +88,18 @@ impl Messenger {
 pub struct ContainerData {
     tables_interested: Vec<String>,
     update_reciver: mpsc::Receiver<Vec<String>>,
-    should_update: Arc<AtomicBool>,
+    time_of_change_sender: mpsc::Sender<DateTime<FixedOffset>>,
 }
 
 impl ContainerData {
     pub(crate) fn new(
         update_reciver: mpsc::Receiver<Vec<String>>,
-        should_update: Arc<AtomicBool>,
+        should_update_sender: mpsc::Sender<DateTime<FixedOffset>>,
     ) -> Self {
         Self {
             tables_interested: vec![],
             update_reciver,
-            should_update,
+            time_of_change_sender: should_update_sender,
         }
     }
 
@@ -125,6 +119,9 @@ impl ContainerData {
 
     /// Tells the container to query again since the values might have changed
     fn should_update(&mut self) {
-        self.should_update.store(true, Ordering::Relaxed);
+        let now = Local::now().into();
+        if let Err(err) = self.time_of_change_sender.try_send(now) {
+            unreachable!("{}", err)
+        }
     }
 }

@@ -1,6 +1,6 @@
-use sea_orm::{EntityTrait, Select};
+use sea_orm::EntityTrait;
 use sqlx_projector::projectors::{FromEntity, ToEntity};
-use tracing::{error, info};
+use tracing::error;
 
 use crate::carrier::{
     execute::{ExecuteCarrier, HasExecuteCarrier},
@@ -18,6 +18,7 @@ where
     DbValue: EntityTrait + Send + 'static,
     <DbValue as EntityTrait>::Model: FromEntity<Value> + ToEntity<Value>,
 {
+    pub name: String,
     pub data: Data<Value>,
     query_carrier: QueryCarrier<DbValue>,
     execute_carrier: ExecuteCarrier,
@@ -30,10 +31,12 @@ where
     <DbValue as EntityTrait>::Model: FromEntity<Value> + ToEntity<Value>,
 {
     pub(crate) fn from_carriers(
+        name: String,
         query_carrier: QueryCarrier<DbValue>,
         execute_carrier: ExecuteCarrier,
     ) -> Self {
         Self {
+            name,
             data: Data::default(),
             query_carrier,
             execute_carrier,
@@ -45,6 +48,7 @@ where
     }
 
     pub fn state_update(&mut self, redo: bool) {
+        self.query_carrier.try_recive_should_update();
         if let Some(result) = self.query_carrier.try_resolve_query() {
             match result {
                 Ok(values) => self.data.set(values.into_iter().map(ToEntity::to_entity)),
@@ -111,6 +115,7 @@ where
 {
     fn clone(&self) -> Self {
         Self {
+            name: self.name.clone(),
             data: Data::default(),
             query_carrier: self.query_carrier.clone(),
             execute_carrier: self.execute_carrier.clone(),

@@ -10,3 +10,4 @@ sqlx_projector = { path = "../sqlx_projector" }
 permutation = "0.4.1"
 sea-query = { version = "0.32.1", features = ["thread-safe", "backend-sqlite", "with-chrono", "with-uuid"] }
 sea-orm = { version = "1.1.4", default-features = false }
+chrono = "0.4.39"

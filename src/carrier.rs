@@ -10,6 +10,7 @@ pub mod query;
 
 pub(crate) fn both_carriers<DbValue>(
     pool: DatabaseConnection,
+    name: String,
     all_tables: Vec<String>,
     tables_changed_sender: mpsc::Sender<Vec<String>>,
     new_register_sender: mpsc::Sender<ContainerData>,
@@ -18,6 +19,7 @@ where
     DbValue: EntityTrait + Send + 'static,
 {
     let query = QueryCarrier::register_new(
+        name,
         pool.clone(),
         all_tables.clone(),
         tables_changed_sender.clone(),
