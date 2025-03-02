@@ -1,10 +1,11 @@
+use core::panic;
 use std::collections::HashSet;
 
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbBackend, DbErr, QueryTrait, Statement, TransactionTrait,
 };
 use tokio::{sync::mpsc, task};
-use tracing::error;
+use tracing::{error, info};
 
 use crate::{actor::Actor, get_tables_present, messenger::ContainerData};
 
@@ -46,8 +47,7 @@ impl ExecuteCarrier {
         tables_changed_sender: mpsc::Sender<Vec<String>>,
         new_register_sender: mpsc::Sender<ContainerData>,
     ) -> Self {
-        let (sender, reciver) = mpsc::channel(20);
-
+        let (sender, reciver) = mpsc::channel(50);
         Self {
             db: pool,
             all_tables,
@@ -77,15 +77,29 @@ impl ExecuteCarrier {
     }
 
     pub fn execute(&mut self, execute: impl QueryTrait + Send + 'static) {
-        let db = self.db.clone();
-        let sender = self._bk_executing_sender.clone();
+        Self::execute_static(
+            self.db.clone(),
+            self._bk_executing_sender.clone(),
+            &self.all_tables,
+            execute,
+        );
+    }
 
+    pub(crate) fn execute_static(
+        db: DatabaseConnection,
+        sender: mpsc::Sender<Result<Vec<String>, DbErr>>,
+        all_tables: &[String],
+        execute: impl QueryTrait + Send + 'static,
+    ) {
         let execute = execute.build(DbBackend::Sqlite);
-        let tables = get_tables_present(&self.all_tables, &execute.to_string());
+        let tables = get_tables_present(all_tables, &execute.to_string());
 
         task::spawn(async move {
+            assert!(!sender.is_closed());
             let result = db.execute(execute).await.map(|_| tables);
-            sender.send(result).await.unwrap();
+            if let Err(error) = sender.send(result).await {
+                panic!("{error}");
+            }
         });
     }
 
@@ -101,25 +115,31 @@ impl ExecuteCarrier {
             let db = db.clone();
             let sender = sender.clone();
 
-            let execute = execute.build(DbBackend::Sqlite);
-            let tables = get_tables_present(&all_tables, &execute.to_string());
-
-            task::spawn(async move {
-                let result = db.execute(execute).await.map(|_| tables);
-                sender.send(result).await.unwrap();
-            });
+            Self::execute_static(db, sender, &all_tables, execute);
         }
     }
 
-    pub fn execute_many(&mut self, transaction_builder: impl FnOnce(&mut TransactionBuilder)) {
-        let db = self.db.clone();
-        let sender = self._bk_executing_sender.clone();
+    pub fn execute_many(&self, transaction_builder: impl FnOnce(&mut TransactionBuilder)) {
+        Self::execute_many_static(
+            self.db.clone(),
+            self._bk_executing_sender.clone(),
+            &self.all_tables,
+            transaction_builder,
+        );
+    }
 
-        let mut builder = TransactionBuilder::new(&self.all_tables);
+    pub(crate) fn execute_many_static(
+        db: DatabaseConnection,
+        sender: mpsc::Sender<ExecuteResult>,
+        all_tables: &[String],
+        transaction_builder: impl FnOnce(&mut TransactionBuilder),
+    ) {
+        let mut builder = TransactionBuilder::new(all_tables);
         transaction_builder(&mut builder);
         let TransactionBuilder { executes, .. } = builder;
 
         task::spawn(async move {
+            assert!(!sender.is_closed());
             let transaction = async move || {
                 let txn = db.begin().await?;
 
@@ -136,8 +156,27 @@ impl ExecuteCarrier {
                 Ok(tables.into_iter().collect::<Vec<_>>())
             };
 
-            sender.send(transaction().await).await.unwrap();
+            let transaction_result = transaction().await;
+            if let Err(send_error) = sender.send(transaction_result).await {
+                panic!("{send_error}");
+            }
         });
+    }
+
+    pub fn many_action<B>(&self) -> impl Fn(B)
+    where
+        B: FnOnce(&mut TransactionBuilder),
+    {
+        let db = self.db.clone();
+        let sender = self._bk_executing_sender.clone();
+        let all_tables = self.all_tables.clone();
+
+        move |transaction_builder| {
+            let db = db.clone();
+            let sender = sender.clone();
+
+            Self::execute_many_static(db, sender, &all_tables, transaction_builder);
+        }
     }
 }
 
@@ -177,7 +216,7 @@ impl TransactionExecute {
     }
 }
 
-type ExecuteResult = Result<Vec<String>, DbErr>;
+pub(crate) type ExecuteResult = Result<Vec<String>, DbErr>;
 
 pub trait ImplExecuteCarrier {
     fn actor(&self) -> Actor;
@@ -186,6 +225,9 @@ pub trait ImplExecuteCarrier {
         E: QueryTrait + Send + 'static;
     fn execute(&mut self, execute: impl QueryTrait + Send + 'static);
     fn execute_many(&mut self, transaction_builder: impl FnOnce(&mut TransactionBuilder));
+    fn many_action<B>(&self) -> impl Fn(B)
+    where
+        B: FnOnce(&mut TransactionBuilder);
 }
 
 impl<T> ImplExecuteCarrier for T
@@ -193,7 +235,12 @@ where
     T: HasExecuteCarrier,
 {
     fn actor(&self) -> Actor {
-        Actor::new(self.ref_execute_carrier().clone())
+        let carrier = self.ref_execute_carrier();
+        Actor::new(
+            carrier.db.clone(),
+            &carrier.all_tables,
+            carrier._bk_executing_sender.clone(),
+        )
     }
     fn action<E>(&self) -> impl Fn(E)
     where
@@ -207,6 +254,13 @@ where
     fn execute_many(&mut self, transaction_builder: impl FnOnce(&mut TransactionBuilder)) {
         self.ref_mut_execute_carrier()
             .execute_many(transaction_builder);
+    }
+
+    fn many_action<B>(&self) -> impl Fn(B)
+    where
+        B: FnOnce(&mut TransactionBuilder),
+    {
+        self.ref_execute_carrier().many_action()
     }
 }
 

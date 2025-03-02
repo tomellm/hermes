@@ -40,7 +40,7 @@ impl<Value> Data<Value> {
 
     pub(super) fn new_sorting(
         &mut self,
-        sorting_fn: impl Fn(&Value, &Value) -> Ordering + Send + 'static,
+        sorting_fn: impl Fn(&Value, &Value) -> Ordering + Send + Sync + 'static,
     ) {
         let mut new_sorting = DataSorting::new(sorting_fn);
         new_sorting.resort(&self.data);
@@ -60,7 +60,7 @@ struct DataSorting<Value> {
 }
 
 impl<Value> DataSorting<Value> {
-    fn new(soring_fn: impl Fn(&Value, &Value) -> Ordering + Send + 'static) -> Self {
+    fn new(soring_fn: impl Fn(&Value, &Value) -> Ordering + Sync + Send + 'static) -> Self {
         Self {
             permutation: permutation::sort_by(Vec::<Value>::new(), &soring_fn),
             sorting_fn: Box::new(soring_fn),
@@ -72,11 +72,11 @@ impl<Value> DataSorting<Value> {
     }
 }
 
-type SortingFn<Value> = Box<dyn Fn(&Value, &Value) -> Ordering + Send + 'static>;
+type SortingFn<Value> = Box<dyn Fn(&Value, &Value) -> Ordering + Sync + Send + 'static>;
 
 pub trait ImplData<Value> {
     fn data(&self) -> &Vec<Value>;
-    fn sort(&mut self, sorting_fn: impl Fn(&Value, &Value) -> Ordering + Send + 'static);
+    fn sort(&mut self, sorting_fn: impl Fn(&Value, &Value) -> Ordering + Sync + Send + 'static);
     fn sorted(&self) -> Vec<&Value>;
     fn has_changed(&self) -> bool;
     fn set_viewed(&mut self) -> &mut Self;
@@ -89,7 +89,7 @@ where
     fn data(&self) -> &Vec<Value> {
         &self.ref_data().data
     }
-    fn sort(&mut self, sorting_fn: impl Fn(&Value, &Value) -> Ordering + Send + 'static) {
+    fn sort(&mut self, sorting_fn: impl Fn(&Value, &Value) -> Ordering + Sync + Send + 'static) {
         self.ref_mut_data().new_sorting(sorting_fn);
     }
     fn sorted(&self) -> Vec<&Value> {

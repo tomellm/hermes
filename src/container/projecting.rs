@@ -1,4 +1,6 @@
-use sea_orm::EntityTrait;
+use std::{future::Future, pin::Pin};
+
+use sea_orm::{DbErr, EntityTrait, Select};
 use sqlx_projector::projectors::{FromEntity, ToEntity};
 use tracing::error;
 
@@ -62,6 +64,22 @@ where
                 self.query(select.clone());
             }
         }
+    }
+
+    pub fn direct_proj_query<QValue, QDbValue>(
+        &self,
+        query: Select<QDbValue>,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<QValue>, DbErr>> + Send + 'static>>
+    where
+        QDbValue: EntityTrait + Send + 'static,
+        <QDbValue as EntityTrait>::Model: ToEntity<QValue>,
+    {
+        let future = self.direct_query(query);
+        Box::pin(async move {
+            future
+                .await
+                .map(|values| values.into_iter().map(|val| val.to_entity()).collect())
+        })
     }
 }
 

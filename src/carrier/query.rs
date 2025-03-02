@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, mem};
+use std::{cmp::Ordering, future::Future, mem, pin::Pin};
 
 use crate::{container::ContainerBuilder, get_tables_present, messenger::ContainerData};
 use chrono::{DateTime, FixedOffset, Local};
@@ -173,6 +173,17 @@ where
         let _ = self.stored_select.insert(query);
     }
 
+    pub fn direct_query<OneTtimeValue>(
+        &self,
+        query: Select<OneTtimeValue>,
+    ) -> DirectQueryFuture<<OneTtimeValue as EntityTrait>::Model>
+    where
+        OneTtimeValue: EntityTrait + Send + 'static,
+    {
+        let db = self.db.clone();
+        Box::pin(async move { query.into_model::<OneTtimeValue::Model>().all(&db).await })
+    }
+
     pub fn builder(&self) -> ContainerBuilder {
         ContainerBuilder::new(
             self.db.clone(),
@@ -182,6 +193,9 @@ where
         )
     }
 }
+
+pub type DirectQueryFuture<Type> =
+    Pin<Box<dyn Future<Output = Result<Vec<Type>, DbErr>> + Send + 'static>>;
 
 struct ExecutedQuery<DbValue>
 where
@@ -216,6 +230,12 @@ where
     fn should_refresh(&self) -> bool;
     fn query(&mut self, query: Select<DbValue>);
     fn stored_query(&mut self, query: Select<DbValue>);
+    fn direct_query<OneTtimeValue>(
+        &self,
+        query: Select<OneTtimeValue>,
+    ) -> DirectQueryFuture<<OneTtimeValue as EntityTrait>::Model>
+    where
+        OneTtimeValue: EntityTrait + Send + 'static;
 }
 
 impl<T, DbValue> ImplQueryCarrier<DbValue> for T
@@ -231,6 +251,15 @@ where
     }
     fn stored_query(&mut self, query: Select<DbValue>) {
         self.ref_mut_query_carrier().stored_query(query);
+    }
+    fn direct_query<OneTtimeValue>(
+        &self,
+        query: Select<OneTtimeValue>,
+    ) -> DirectQueryFuture<<OneTtimeValue as EntityTrait>::Model>
+    where
+        OneTtimeValue: EntityTrait + Send + 'static,
+    {
+        Box::pin(self.ref_query_carrier().direct_query(query))
     }
 }
 
