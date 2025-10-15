@@ -2,14 +2,17 @@ use core::panic;
 use std::collections::HashSet;
 
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DbBackend, DbErr, QueryTrait, Statement, TransactionTrait,
+    ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, QueryTrait,
+    Statement, TransactionTrait,
 };
 use tokio::{sync::mpsc, task};
-use tracing::{error, info};
+use tracing::{debug, error, Level};
 
 use crate::{actor::Actor, get_tables_present, messenger::ContainerData};
 
 pub(crate) struct ExecuteCarrier {
+    pub(super) name: String,
+
     db: DatabaseConnection,
     all_tables: Vec<String>,
 
@@ -23,6 +26,7 @@ pub(crate) struct ExecuteCarrier {
 impl Clone for ExecuteCarrier {
     fn clone(&self) -> Self {
         Self::register_new(
+            self.name.clone(),
             self.db.clone(),
             self.all_tables.clone(),
             self.tables_changed_sender.clone(),
@@ -33,15 +37,23 @@ impl Clone for ExecuteCarrier {
 
 impl ExecuteCarrier {
     pub fn register_new(
+        name: String,
         pool: DatabaseConnection,
         all_tables: Vec<String>,
         tables_changed_sender: mpsc::Sender<Vec<String>>,
         new_register_sender: mpsc::Sender<ContainerData>,
     ) -> Self {
-        Self::new(pool, all_tables, tables_changed_sender, new_register_sender)
+        Self::new(
+            name,
+            pool,
+            all_tables,
+            tables_changed_sender,
+            new_register_sender,
+        )
     }
 
     fn new(
+        name: String,
         pool: DatabaseConnection,
         all_tables: Vec<String>,
         tables_changed_sender: mpsc::Sender<Vec<String>>,
@@ -49,6 +61,7 @@ impl ExecuteCarrier {
     ) -> Self {
         let (sender, reciver) = mpsc::channel(50);
         Self {
+            name,
             db: pool,
             all_tables,
             executing_executes: reciver,
@@ -69,7 +82,7 @@ impl ExecuteCarrier {
                         let _ = sender.send(tables).await;
                     });
                 }
-                Ok(Err(error)) => error!("{error}"),
+                Ok(Err(error)) => error!("{}: {error}", self.name),
                 Err(mpsc::error::TryRecvError::Empty) => break,
                 _ => unreachable!(),
             }
@@ -78,6 +91,7 @@ impl ExecuteCarrier {
 
     pub fn execute(&mut self, execute: impl QueryTrait + Send + 'static) {
         Self::execute_static(
+            self.name.clone(),
             self.db.clone(),
             self._bk_executing_sender.clone(),
             &self.all_tables,
@@ -86,6 +100,7 @@ impl ExecuteCarrier {
     }
 
     pub(crate) fn execute_static(
+        name: String,
         db: DatabaseConnection,
         sender: mpsc::Sender<Result<Vec<String>, DbErr>>,
         all_tables: &[String],
@@ -98,7 +113,7 @@ impl ExecuteCarrier {
             assert!(!sender.is_closed());
             let result = db.execute(execute).await.map(|_| tables);
             if let Err(error) = sender.send(result).await {
-                panic!("{error}");
+                panic!("{name}: {error}");
             }
         });
     }
@@ -107,15 +122,17 @@ impl ExecuteCarrier {
     where
         E: QueryTrait + Send + 'static,
     {
+        let name = self.name.clone();
         let all_tables = self.all_tables.clone();
         let db = self.db.clone();
         let sender = self._bk_executing_sender.clone();
 
         move |execute: E| {
+            let name = name.clone();
             let db = db.clone();
             let sender = sender.clone();
 
-            Self::execute_static(db, sender, &all_tables, execute);
+            Self::execute_static(name, db, sender, &all_tables, execute);
         }
     }
 
@@ -142,6 +159,8 @@ impl ExecuteCarrier {
             assert!(!sender.is_closed());
             let transaction = async move || {
                 let txn = db.begin().await?;
+                //txn.execute_unprepared("PRAGMA defer_foreign_keys = true")
+                //    .await?;
 
                 let mut tables = HashSet::new();
                 for TransactionExecute {
@@ -152,6 +171,11 @@ impl ExecuteCarrier {
                     txn.execute(execute).await?;
                     tables.extend(interested_tables);
                 }
+
+                if tracing::event_enabled!(Level::DEBUG) {
+                    log_foreign_key_check(&txn).await?;
+                }
+
                 txn.commit().await?;
                 Ok(tables.into_iter().collect::<Vec<_>>())
             };
@@ -198,6 +222,17 @@ impl<'executor> TransactionBuilder<'executor> {
         self.executes.push(transaction_execute);
         self
     }
+
+    pub fn execute_many<Q>(&mut self, execute_iter: impl IntoIterator<Item = Q>) -> &mut Self
+    where
+        Q: QueryTrait + Send + 'static,
+    {
+        let queries = execute_iter
+            .into_iter()
+            .map(|q| TransactionExecute::from_execute(q, self.all_tables));
+        self.executes.extend(queries);
+        self
+    }
 }
 
 struct TransactionExecute {
@@ -237,6 +272,7 @@ where
     fn actor(&self) -> Actor {
         let carrier = self.ref_execute_carrier();
         Actor::new(
+            carrier.name.clone(),
             carrier.db.clone(),
             &carrier.all_tables,
             carrier._bk_executing_sender.clone(),
@@ -267,4 +303,45 @@ where
 pub(crate) trait HasExecuteCarrier {
     fn ref_execute_carrier(&self) -> &ExecuteCarrier;
     fn ref_mut_execute_carrier(&mut self) -> &mut ExecuteCarrier;
+}
+
+async fn log_foreign_key_check(txn: &DatabaseTransaction) -> Result<(), DbErr> {
+    let res = txn
+        .query_all(Statement::from_string(
+            DbBackend::Sqlite,
+            "PRAGMA foreign_key_check;",
+        ))
+        .await?;
+
+    if res.is_empty() {
+        debug!("There are no FK issues");
+        return Ok(());
+    }
+
+    debug!(
+        r#"Result of checking FK's:
+{}
+{}"#,
+        res.first()
+            .map(|r| r.column_names().join("|"))
+            .unwrap_or_default(),
+        res.iter()
+            .map(|r| {
+                r.column_names()
+                    .into_iter()
+                    .map(
+                        |col| match (r.try_get::<String>("", &col), r.try_get::<i32>("", &col)) {
+                            (Ok(str_val), Err(_)) => str_val,
+                            (Err(_), Ok(int_val)) => int_val.to_string(),
+                            (Err(err1), Err(err2)) => unreachable!("{err1}{err2}"),
+                            _ => unreachable!(),
+                        },
+                    )
+                    .collect::<Vec<_>>()
+                    .join("|")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    Ok(())
 }

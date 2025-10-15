@@ -1,12 +1,12 @@
 use sea_orm::{DatabaseConnection, QueryTrait};
 use tokio::sync::mpsc;
 
-use crate::carrier::execute::{
-    ExecuteCarrier, ExecuteResult, HasExecuteCarrier, ImplExecuteCarrier,
-};
+use crate::carrier::execute::{ExecuteCarrier, ExecuteResult, ImplExecuteCarrier};
 
 #[derive(Clone)]
 pub struct Actor {
+    name: String,
+
     db: DatabaseConnection,
     all_tables: Vec<String>,
 
@@ -15,11 +15,13 @@ pub struct Actor {
 
 impl Actor {
     pub fn new(
+        name: String,
         db: DatabaseConnection,
         all_tables: &[String],
         _bk_executing_sender: mpsc::Sender<ExecuteResult>,
     ) -> Self {
         Self {
+            name,
             db,
             all_tables: all_tables.to_vec(),
             _bk_executing_sender,
@@ -36,20 +38,25 @@ impl ImplExecuteCarrier for Actor {
     where
         E: QueryTrait + Send + 'static,
     {
+        let name = self.name.clone();
         let all_tables = self.all_tables.clone();
         let db = self.db.clone();
         let sender = self._bk_executing_sender.clone();
 
         move |execute: E| {
-            let db = db.clone();
-            let sender = sender.clone();
-
-            ExecuteCarrier::execute_static(db, sender, &all_tables, execute);
+            ExecuteCarrier::execute_static(
+                name.clone(),
+                db.clone(),
+                sender.clone(),
+                &all_tables,
+                execute,
+            );
         }
     }
 
     fn execute(&mut self, execute: impl QueryTrait + Send + 'static) {
         ExecuteCarrier::execute_static(
+            self.name.clone(),
             self.db.clone(),
             self._bk_executing_sender.clone(),
             &self.all_tables,
@@ -78,10 +85,12 @@ impl ImplExecuteCarrier for Actor {
         let all_tables = self.all_tables.clone();
 
         move |transaction_builder| {
-            let db = db.clone();
-            let sender = sender.clone();
-
-            ExecuteCarrier::execute_many_static(db, sender, &all_tables, transaction_builder);
+            ExecuteCarrier::execute_many_static(
+                db.clone(),
+                sender.clone(),
+                &all_tables,
+                transaction_builder,
+            );
         }
     }
 }

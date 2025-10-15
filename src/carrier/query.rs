@@ -1,9 +1,8 @@
-use std::{cmp::Ordering, future::Future, mem, pin::Pin};
+use std::{cmp::Ordering, mem};
 
-use crate::{container::ContainerBuilder, get_tables_present, messenger::ContainerData};
-use chrono::{DateTime, FixedOffset, Local};
-use sea_orm::{DatabaseConnection, DbErr, EntityTrait, QueryTrait, Select};
-use sea_query::SqliteQueryBuilder;
+use crate::{container::ContainerBuilder, messenger::ContainerData, TablesCollector};
+use chrono::{DateTime, FixedOffset};
+use sea_orm::{DatabaseConnection, DbErr};
 use tokio::{
     sync::{
         mpsc,
@@ -11,33 +10,31 @@ use tokio::{
     },
     task,
 };
-use tracing::info;
+use tracing::trace;
 
-pub struct QueryCarrier<DbValue>
+pub struct QueryCarrier<Value>
 where
-    DbValue: EntityTrait + Send + 'static,
+    Value: Send + 'static,
 {
-    name: String,
+    pub(super) name: String,
 
-    db: DatabaseConnection,
-    all_tables: Vec<String>,
+    pub(super) db: DatabaseConnection,
+    pub(super) all_tables: Vec<String>,
 
     interesting_tables: Vec<String>,
-    executing_query: Option<oneshot::Receiver<ExecutedQuery<DbValue::Model>>>,
+    pub(super) executing_query: Option<oneshot::Receiver<ExecutedQuery<Value>>>,
     tables_interested_sender: mpsc::Sender<Vec<String>>,
 
-    should_update: UpdateState,
+    pub(super) should_update: UpdateState,
     time_of_change_reciver: mpsc::Receiver<DateTime<FixedOffset>>,
 
     new_register_sender: mpsc::Sender<ContainerData>,
     tables_changed_sender: mpsc::Sender<Vec<String>>,
-
-    pub(crate) stored_select: Option<Select<DbValue>>,
 }
 
-impl<DbValue> Clone for QueryCarrier<DbValue>
+impl<Value> Clone for QueryCarrier<Value>
 where
-    DbValue: EntityTrait + Send + 'static,
+    Value: Send + 'static,
 {
     fn clone(&self) -> Self {
         Self::register_new(
@@ -50,9 +47,9 @@ where
     }
 }
 
-impl<DbValue> QueryCarrier<DbValue>
+impl<Value> QueryCarrier<Value>
 where
-    DbValue: EntityTrait + Send,
+    Value: Send,
 {
     pub fn register_new(
         name: String,
@@ -101,7 +98,6 @@ where
             should_update: UpdateState::UpToDate,
             time_of_change_reciver: update_reciver,
             new_register_sender,
-            stored_select: None,
         }
     }
 
@@ -115,7 +111,7 @@ where
         }
     }
 
-    pub fn try_resolve_query(&mut self) -> Option<Result<Vec<DbValue::Model>, DbErr>> {
+    pub fn try_resolve_query(&mut self) -> Option<Result<Vec<Value>, DbErr>> {
         let mut executed_query = Option::take(&mut self.executing_query)?;
         match executed_query.try_recv() {
             Ok(result) => {
@@ -143,47 +139,6 @@ where
         }
     }
 
-    pub fn query(&mut self, mut query: Select<DbValue>) {
-        let time_started = Local::now().into();
-        self.should_update.set_updating(time_started);
-
-        let db = self.db.clone();
-        let (sender, reciever) = oneshot::channel();
-        let query_string = query.query().to_string(SqliteQueryBuilder);
-        let tables = get_tables_present(&self.all_tables, &query_string);
-
-        let sub_str = if query_string.len() > 500 {
-            &query_string[0..500]
-        } else {
-            &query_string
-        };
-        info!("QueryCarrier: '{}' has queried for {}", self.name, sub_str);
-
-        task::spawn(async move {
-            let result = query.into_model::<DbValue::Model>().all(&db).await;
-            let _ = sender.send(ExecutedQuery::new(tables, result, time_started));
-        });
-        #[allow(unused_must_use)]
-        self.executing_query.insert(reciever);
-    }
-
-    /// Does the action once and then stores it internally to redo later
-    pub fn stored_query(&mut self, query: Select<DbValue>) {
-        self.query(query.clone());
-        let _ = self.stored_select.insert(query);
-    }
-
-    pub fn direct_query<OneTtimeValue>(
-        &self,
-        query: Select<OneTtimeValue>,
-    ) -> DirectQueryFuture<<OneTtimeValue as EntityTrait>::Model>
-    where
-        OneTtimeValue: EntityTrait + Send + 'static,
-    {
-        let db = self.db.clone();
-        Box::pin(async move { query.into_model::<OneTtimeValue::Model>().all(&db).await })
-    }
-
     pub fn builder(&self) -> ContainerBuilder {
         ContainerBuilder::new(
             self.db.clone(),
@@ -194,25 +149,62 @@ where
     }
 }
 
-pub type DirectQueryFuture<Type> =
-    Pin<Box<dyn Future<Output = Result<Vec<Type>, DbErr>> + Send + 'static>>;
-
-struct ExecutedQuery<DbValue>
+pub trait ImplQueryCarrier<Value>
 where
-    DbValue: Send + 'static,
+    Value: Send + 'static,
+{
+    fn should_refresh(&self) -> bool;
+    fn try_recive_should_update(&mut self);
+    fn try_resolve_query(&mut self) -> Option<Result<Vec<Value>, DbErr>>;
+    fn builder(&self) -> crate::container::ContainerBuilder;
+}
+
+impl<T, Value> ImplQueryCarrier<Value> for T
+where
+    T: HasQueryCarrier<Value>,
+    Value: Send + 'static,
+{
+    fn should_refresh(&self) -> bool {
+        self.ref_query_carrier().should_refresh()
+    }
+
+    fn try_recive_should_update(&mut self) {
+        self.ref_mut_query_carrier().try_recive_should_update();
+    }
+
+    fn try_resolve_query(&mut self) -> Option<Result<Vec<Value>, DbErr>> {
+        self.ref_mut_query_carrier().try_resolve_query()
+    }
+
+    fn builder(&self) -> crate::container::ContainerBuilder {
+        self.ref_query_carrier().builder()
+    }
+}
+
+pub(crate) trait HasQueryCarrier<Value>
+where
+    Value: Send + 'static,
+{
+    fn ref_query_carrier(&self) -> &QueryCarrier<Value>;
+    fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<Value>;
+}
+
+pub struct ExecutedQuery<Value>
+where
+    Value: Send + 'static,
 {
     interested_tables: Vec<String>,
-    query_result: Result<Vec<DbValue>, DbErr>,
+    query_result: Result<Vec<Value>, DbErr>,
     time_started: DateTime<FixedOffset>,
 }
 
-impl<DbValue> ExecutedQuery<DbValue>
+impl<Value> ExecutedQuery<Value>
 where
-    DbValue: Send + 'static,
+    Value: Send + 'static,
 {
-    fn new(
+    pub fn new(
         interested_tables: Vec<String>,
-        values: Result<Vec<DbValue>, DbErr>,
+        values: Result<Vec<Value>, DbErr>,
         time_started: DateTime<FixedOffset>,
     ) -> Self {
         Self {
@@ -221,54 +213,14 @@ where
             time_started,
         }
     }
-}
 
-pub trait ImplQueryCarrier<DbValue>
-where
-    DbValue: EntityTrait + Send + 'static,
-{
-    fn should_refresh(&self) -> bool;
-    fn query(&mut self, query: Select<DbValue>);
-    fn stored_query(&mut self, query: Select<DbValue>);
-    fn direct_query<OneTtimeValue>(
-        &self,
-        query: Select<OneTtimeValue>,
-    ) -> DirectQueryFuture<<OneTtimeValue as EntityTrait>::Model>
-    where
-        OneTtimeValue: EntityTrait + Send + 'static;
-}
-
-impl<T, DbValue> ImplQueryCarrier<DbValue> for T
-where
-    T: HasQueryCarrier<DbValue>,
-    DbValue: EntityTrait + Send + 'static,
-{
-    fn should_refresh(&self) -> bool {
-        self.ref_query_carrier().should_refresh()
+    pub fn new_collector(collector: TablesCollector, values: Result<Vec<Value>, DbErr>) -> Self {
+        Self {
+            interested_tables: collector.tables.into_iter().collect(),
+            query_result: values,
+            time_started: collector.time_started,
+        }
     }
-    fn query(&mut self, query: Select<DbValue>) {
-        self.ref_mut_query_carrier().query(query);
-    }
-    fn stored_query(&mut self, query: Select<DbValue>) {
-        self.ref_mut_query_carrier().stored_query(query);
-    }
-    fn direct_query<OneTtimeValue>(
-        &self,
-        query: Select<OneTtimeValue>,
-    ) -> DirectQueryFuture<<OneTtimeValue as EntityTrait>::Model>
-    where
-        OneTtimeValue: EntityTrait + Send + 'static,
-    {
-        Box::pin(self.ref_query_carrier().direct_query(query))
-    }
-}
-
-pub(crate) trait HasQueryCarrier<DbValue>
-where
-    DbValue: EntityTrait + Send + 'static,
-{
-    fn ref_query_carrier(&self) -> &QueryCarrier<DbValue>;
-    fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<DbValue>;
 }
 
 #[derive(Copy, Clone)]
@@ -282,69 +234,128 @@ pub(crate) enum UpdateState {
 }
 
 impl UpdateState {
+    pub fn display(&self) -> &'static str {
+        match self {
+            UpdateState::ShouldUpdate => "ShouldUpdate",
+            UpdateState::Updating { .. } => "Updating",
+            UpdateState::UpToDate => "UpToDate",
+        }
+    }
+
+    pub fn log_state_change(&self, new_val: &Self) {
+        trace!(
+            "Internal query UpdateState is being changed from {} to {}",
+            self.display(),
+            new_val.display()
+        )
+    }
+
+    /// The the enum that we have started updating, with the starttime of `time_started`
+    ///
+    /// * `time_started` - The time at which the Update started, also acts as an
+    ///   identifier for the update.
     pub(crate) fn set_updating(&mut self, time_started: DateTime<FixedOffset>) {
-        let back_to_back = match self {
-            Self::Updating { back_to_back, .. } => *back_to_back,
-            _ => None,
+        let time_started = match self {
+            Self::Updating {
+                back_to_back: Some(back_to_back),
+                ..
+            } => match time_started.cmp(back_to_back) {
+                Ordering::Less => *back_to_back,
+                _ => time_started,
+            },
+            _ => time_started,
         };
         let new_val = Self::Updating {
             time_started,
-            back_to_back,
+            back_to_back: None,
         };
+        self.log_state_change(&new_val);
         let _ = mem::replace(self, new_val);
     }
+
+    /// When an update is done then the state needs to be set to `UpToDate`
+    /// but as there can be multiple states beeing updated at the same time
+    /// the `update_time_state` is used to check which update is the one beeing
+    /// resolved
+    ///
+    /// * `update_time_state` - Time at which the update trying to be resolved
+    ///   has been started
     pub(crate) fn check_and_set_done(&mut self, update_time_started: DateTime<FixedOffset>) {
         if let Self::Updating {
             time_started,
             back_to_back,
         } = &self
         {
+            trace!(
+                "Checking to see if update is done, comparing expected '{}' with '{}'",
+                update_time_started.to_string(),
+                time_started.to_string()
+            );
+            // compare the expected time and the actual time started
             let date_cmp = update_time_started.cmp(time_started);
             let new_val = match (date_cmp, *back_to_back) {
+                // if the current time started is more recent do noething
                 (Ordering::Less, _) => None,
+                // if the current update is Equal of Greater then we are
+                // UpToDate and done
                 (_, None) => Some(Self::UpToDate),
-                (Ordering::Equal, Some(_)) => Some(Self::ShouldUpdate),
-                (Ordering::Greater, Some(back_to_back)) => {
-                    match update_time_started.cmp(&back_to_back) {
-                        Ordering::Greater => Some(Self::UpToDate),
-                        _ => Some(Self::ShouldUpdate),
-                    }
-                }
+                // if there is a back to back then compare its time and in case
+                // schedule a new update
+                (_, Some(back_to_back)) => match update_time_started.cmp(&back_to_back) {
+                    Ordering::Greater => Some(Self::UpToDate),
+                    _ => Some(Self::ShouldUpdate),
+                },
             };
             if let Some(new_val) = new_val {
+                self.log_state_change(&new_val);
                 let _ = mem::replace(self, new_val);
             }
         }
     }
 
+    /// Sets this enums value anew depending on when a specific change
+    /// happend. Meaning that if we think we are up to date we now we need to
+    /// update for a change that happend at `time_of_change` time. But if we are
+    /// already updating for a change after `time_of_change` then we can ignore
+    /// the state. If on the other hand we are updating for a change that happend
+    /// before the `time_of_change` we have to update back to back.
+    ///
+    /// * `time_of_change` - The time at which a change happend, used to consider
+    ///   if a we are currently not already working on a newer change
     pub(crate) fn set_should_update(&mut self, time_of_change: DateTime<FixedOffset>) {
         let new_val = match &self {
+            // we are currently already updating
             Self::Updating {
                 time_started,
                 back_to_back,
             } => match (time_started.cmp(&time_of_change), back_to_back) {
+                // we are already updating for newer change
                 (Ordering::Greater, _) => None,
+                // we are updating for same or older change and not already back to back
                 (_, None) => Some(Self::Updating {
                     time_started: *time_started,
                     back_to_back: Some(time_of_change),
                 }),
+                // we are updating for same or older change and its already back to back
                 (_, Some(prev_time_of_change)) => {
-                    let new_time_of_change =
-                        if matches!(prev_time_of_change.cmp(&time_of_change), Ordering::Greater) {
-                            prev_time_of_change
-                        } else {
-                            &time_of_change
-                        };
+                    // get more recent time
+                    let new_time_of_change = match prev_time_of_change.cmp(&time_of_change) {
+                        Ordering::Greater => prev_time_of_change,
+                        _ => &time_of_change,
+                    };
                     Some(Self::Updating {
                         time_started: *time_started,
                         back_to_back: Some(*new_time_of_change),
                     })
                 }
             },
+            // we already know an update should happen so no change in state
             Self::ShouldUpdate => None,
+            // we think we are up to date, so change to communicate imminent update needed
             Self::UpToDate => Some(Self::ShouldUpdate),
         };
         if let Some(new_val) = new_val {
+            self.log_state_change(&new_val);
             let _ = mem::replace(self, new_val);
         }
     }

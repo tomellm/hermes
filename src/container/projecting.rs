@@ -6,7 +6,8 @@ use tracing::error;
 
 use crate::carrier::{
     execute::{ExecuteCarrier, HasExecuteCarrier},
-    query::{HasQueryCarrier, ImplQueryCarrier, QueryCarrier},
+    query::ImplQueryCarrier,
+    simple_query::{HasSimpleQueryCarrier, ImplSimpleQueryCarrier, SimpleQueryCarrier},
 };
 
 use super::{
@@ -22,7 +23,7 @@ where
 {
     pub name: String,
     pub data: Data<Value>,
-    query_carrier: QueryCarrier<DbValue>,
+    query_carrier: SimpleQueryCarrier<DbValue>,
     execute_carrier: ExecuteCarrier,
 }
 
@@ -34,7 +35,7 @@ where
 {
     pub(crate) fn from_carriers(
         name: String,
-        query_carrier: QueryCarrier<DbValue>,
+        query_carrier: SimpleQueryCarrier<DbValue>,
         execute_carrier: ExecuteCarrier,
     ) -> Self {
         Self {
@@ -49,17 +50,17 @@ where
         self.query_carrier.builder()
     }
 
-    pub fn state_update(&mut self, redo: bool) {
+    pub fn state_update(&mut self, automatic_requery: bool) {
         self.query_carrier.try_recive_should_update();
         if let Some(result) = self.query_carrier.try_resolve_query() {
             match result {
                 Ok(values) => self.data.set(values.into_iter().map(ToEntity::to_entity)),
-                Err(error) => error!("{error}"),
+                Err(error) => error!(container = self.name, error = error.to_string()),
             }
         }
         self.execute_carrier.try_resolve_executes();
 
-        if redo && self.should_refresh() {
+        if automatic_requery && self.should_refresh() {
             if let Some(select) = &self.query_carrier.stored_select {
                 self.query(select.clone());
             }
@@ -83,16 +84,16 @@ where
     }
 }
 
-impl<Value, DbValue> HasQueryCarrier<DbValue> for ProjectingContainer<Value, DbValue>
+impl<Value, DbValue> HasSimpleQueryCarrier<DbValue> for ProjectingContainer<Value, DbValue>
 where
     Value: Send,
     DbValue: EntityTrait + Send + 'static,
     <DbValue as EntityTrait>::Model: FromEntity<Value> + ToEntity<Value>,
 {
-    fn ref_query_carrier(&self) -> &QueryCarrier<DbValue> {
+    fn ref_simple_query_carrier(&self) -> &SimpleQueryCarrier<DbValue> {
         &self.query_carrier
     }
-    fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<DbValue> {
+    fn ref_mut_simple_query_carrier(&mut self) -> &mut SimpleQueryCarrier<DbValue> {
         &mut self.query_carrier
     }
 }

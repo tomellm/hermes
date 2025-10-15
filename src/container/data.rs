@@ -1,9 +1,9 @@
-use std::{borrow::Borrow, cmp::Ordering};
+use std::{borrow::Borrow, cmp::Ordering, sync::Arc};
 
 use permutation::Permutation;
 
 pub struct Data<Value> {
-    pub(crate) data: Vec<Value>,
+    pub(crate) data: Arc<[Value]>,
     sorting: Option<DataSorting<Value>>,
     has_changed: bool,
 }
@@ -11,7 +11,17 @@ pub struct Data<Value> {
 impl<Value> Default for Data<Value> {
     fn default() -> Self {
         Self {
-            data: vec![],
+            data: vec![].into(),
+            sorting: None,
+            has_changed: true,
+        }
+    }
+}
+
+impl<Value> From<Vec<Value>> for Data<Value> {
+    fn from(value: Vec<Value>) -> Self {
+        Self {
+            data: value.into(),
             sorting: None,
             has_changed: true,
         }
@@ -20,8 +30,7 @@ impl<Value> Default for Data<Value> {
 
 impl<Value> Data<Value> {
     pub(crate) fn set(&mut self, new_data: impl Iterator<Item = Value>) {
-        self.data.clear();
-        self.data.extend(new_data);
+        self.data = new_data.collect::<Vec<_>>().into();
         self.has_changed = true;
         self.resort();
     }
@@ -67,7 +76,7 @@ impl<Value> DataSorting<Value> {
         }
     }
 
-    fn resort(&mut self, data: &Vec<Value>) {
+    fn resort(&mut self, data: &[Value]) {
         self.permutation = permutation::sort_by(data, |a, b| (self.sorting_fn)(a, b))
     }
 }
@@ -75,7 +84,7 @@ impl<Value> DataSorting<Value> {
 type SortingFn<Value> = Box<dyn Fn(&Value, &Value) -> Ordering + Sync + Send + 'static>;
 
 pub trait ImplData<Value> {
-    fn data(&self) -> &Vec<Value>;
+    fn data(&self) -> &Arc<[Value]>;
     fn sort(&mut self, sorting_fn: impl Fn(&Value, &Value) -> Ordering + Sync + Send + 'static);
     fn sorted(&self) -> Vec<&Value>;
     fn has_changed(&self) -> bool;
@@ -86,7 +95,7 @@ impl<T, Value> ImplData<Value> for T
 where
     T: HasData<Value>,
 {
-    fn data(&self) -> &Vec<Value> {
+    fn data(&self) -> &Arc<[Value]> {
         &self.ref_data().data
     }
     fn sort(&mut self, sorting_fn: impl Fn(&Value, &Value) -> Ordering + Sync + Send + 'static) {
@@ -107,4 +116,14 @@ where
 pub(crate) trait HasData<Value> {
     fn ref_data(&self) -> &Data<Value>;
     fn ref_mut_data(&mut self) -> &mut Data<Value>;
+}
+
+impl<Value> HasData<Value> for Data<Value> {
+    fn ref_data(&self) -> &Data<Value> {
+        self
+    }
+
+    fn ref_mut_data(&mut self) -> &mut Data<Value> {
+        self
+    }
 }

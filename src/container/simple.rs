@@ -3,7 +3,8 @@ use tracing::error;
 
 use crate::carrier::{
     execute::{ExecuteCarrier, HasExecuteCarrier},
-    query::{HasQueryCarrier, QueryCarrier},
+    query::ImplQueryCarrier,
+    simple_query::{HasSimpleQueryCarrier, SimpleQueryCarrier},
 };
 
 use super::ContainerBuilder;
@@ -13,7 +14,7 @@ where
     DbValue: EntityTrait + Send + 'static,
 {
     values: Vec<DbValue::Model>,
-    query_carrier: QueryCarrier<DbValue>,
+    query_carrier: SimpleQueryCarrier<DbValue>,
     execute_carrier: ExecuteCarrier,
 }
 
@@ -22,7 +23,7 @@ where
     DbValue: EntityTrait + Send + 'static,
 {
     pub(crate) fn from_carriers(
-        query_carrier: QueryCarrier<DbValue>,
+        query_carrier: SimpleQueryCarrier<DbValue>,
         execute_carrier: ExecuteCarrier,
     ) -> Self {
         Self {
@@ -53,14 +54,14 @@ where
     }
 }
 
-impl<DbValue> HasQueryCarrier<DbValue> for Container<DbValue>
+impl<DbValue> HasSimpleQueryCarrier<DbValue> for Container<DbValue>
 where
     DbValue: EntityTrait + Send + 'static,
 {
-    fn ref_query_carrier(&self) -> &QueryCarrier<DbValue> {
+    fn ref_simple_query_carrier(&self) -> &SimpleQueryCarrier<DbValue> {
         &self.query_carrier
     }
-    fn ref_mut_query_carrier(&mut self) -> &mut QueryCarrier<DbValue> {
+    fn ref_mut_simple_query_carrier(&mut self) -> &mut SimpleQueryCarrier<DbValue> {
         &mut self.query_carrier
     }
 }

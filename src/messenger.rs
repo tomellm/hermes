@@ -19,7 +19,7 @@ pub struct Messenger {
 impl Messenger {
     pub async fn new(db: DatabaseConnection) -> Self {
         let (tables_changed_sender, tables_changed) = mpsc::channel(50);
-        let (new_register_sender, new_register_reciver) = mpsc::channel(5);
+        let (new_register_sender, new_register_reciver) = mpsc::channel(20);
 
         let all_tables = db
             .query_all(Statement::from_string(
@@ -29,10 +29,7 @@ impl Messenger {
             .await
             .unwrap()
             .into_iter()
-            .map(|result| {
-                let cell = result.try_get::<String>("", "name").unwrap();
-                format!("\"{cell}\"")
-            })
+            .map(|result| format!("\"{}\"", result.try_get::<String>("", "name").unwrap()))
             .collect();
 
         Self {
