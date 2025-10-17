@@ -2,14 +2,13 @@ use std::{future::Future, pin::Pin};
 
 use chrono::Local;
 use sea_orm::{DatabaseConnection, DbErr, EntityTrait, QueryTrait, Select};
-use sea_query::SqliteQueryBuilder;
 use tokio::{
     sync::{mpsc, oneshot},
     task,
 };
 use tracing::info;
 
-use crate::{get_tables_present, messenger::ContainerData};
+use crate::{get_tables_present, messenger::ContainerData, QUERY_BUILDER};
 
 use super::query::{ExecutedQuery, HasQueryCarrier, ImplQueryCarrier, QueryCarrier};
 
@@ -60,7 +59,7 @@ where
 
         let db = self.carrier.db.clone();
         let (sender, reciever) = oneshot::channel();
-        let query_string = query.query().to_string(SqliteQueryBuilder);
+        let query_string = query.query().to_string(QUERY_BUILDER);
         let tables = get_tables_present(&self.carrier.all_tables, &query_string);
 
         {

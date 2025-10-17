@@ -2,13 +2,13 @@ use core::panic;
 use std::collections::HashSet;
 
 use sea_orm::{
-    ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, DbErr, QueryTrait,
-    Statement, TransactionTrait,
+    ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr, QueryTrait, Statement,
+    TransactionTrait,
 };
 use tokio::{sync::mpsc, task};
 use tracing::{debug, error, Level};
 
-use crate::{actor::Actor, get_tables_present, messenger::ContainerData};
+use crate::{actor::Actor, consts::DB_BACKEND, get_tables_present, messenger::ContainerData};
 
 pub(crate) struct ExecuteCarrier {
     pub(super) name: String,
@@ -106,7 +106,7 @@ impl ExecuteCarrier {
         all_tables: &[String],
         execute: impl QueryTrait + Send + 'static,
     ) {
-        let execute = execute.build(DbBackend::Sqlite);
+        let execute = execute.build(DB_BACKEND);
         let tables = get_tables_present(all_tables, &execute.to_string());
 
         task::spawn(async move {
@@ -242,7 +242,7 @@ struct TransactionExecute {
 
 impl TransactionExecute {
     pub fn from_execute(execute: impl QueryTrait + Send + 'static, all_tables: &[String]) -> Self {
-        let execute = execute.build(DbBackend::Sqlite);
+        let execute = execute.build(DB_BACKEND);
         let interested_tables = get_tables_present(all_tables, &execute.to_string());
         Self {
             interested_tables,
@@ -308,7 +308,7 @@ pub(crate) trait HasExecuteCarrier {
 async fn log_foreign_key_check(txn: &DatabaseTransaction) -> Result<(), DbErr> {
     let res = txn
         .query_all(Statement::from_string(
-            DbBackend::Sqlite,
+            DB_BACKEND,
             "PRAGMA foreign_key_check;",
         ))
         .await?;

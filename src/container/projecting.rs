@@ -1,13 +1,15 @@
 use std::{future::Future, pin::Pin};
 
 use sea_orm::{DbErr, EntityTrait, Select};
-use sqlx_projector::projectors::{FromEntity, ToEntity};
 use tracing::error;
 
-use crate::carrier::{
-    execute::{ExecuteCarrier, HasExecuteCarrier},
-    query::ImplQueryCarrier,
-    simple_query::{HasSimpleQueryCarrier, ImplSimpleQueryCarrier, SimpleQueryCarrier},
+use crate::{
+    carrier::{
+        execute::{ExecuteCarrier, HasExecuteCarrier},
+        query::ImplQueryCarrier,
+        simple_query::{HasSimpleQueryCarrier, ImplSimpleQueryCarrier, SimpleQueryCarrier},
+    },
+    FromEntity, ToEntity,
 };
 
 use super::{

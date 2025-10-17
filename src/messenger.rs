@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::{container::ContainerBuilder, factory::Factory};
+use crate::{consts::DB_BACKEND, container::ContainerBuilder, factory::Factory};
 use chrono::{DateTime, FixedOffset, Local};
 use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, Statement};
 use tokio::sync::mpsc::{self};
@@ -23,7 +23,7 @@ impl Messenger {
 
         let all_tables = db
             .query_all(Statement::from_string(
-                DbBackend::Sqlite,
+                DB_BACKEND,
                 "select name from sqlite_master where type='table';",
             ))
             .await

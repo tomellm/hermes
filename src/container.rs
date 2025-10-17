@@ -1,11 +1,11 @@
 use projecting::ProjectingContainer;
 use sea_orm::{DatabaseConnection, EntityTrait};
-use sqlx_projector::projectors::{FromEntity, ToEntity};
 use tokio::sync::mpsc;
 
 use crate::{
     carrier::{self, execute::ExecuteCarrier, simple_query::SimpleQueryCarrier},
     messenger::ContainerData,
+    FromEntity, ToEntity,
 };
 
 pub mod data;
