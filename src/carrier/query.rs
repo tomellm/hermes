@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, mem};
 
-use crate::{container::ContainerBuilder, messenger::ContainerData, TablesCollector};
+use crate::{container::builder::ContainerBuilder, messenger::ContainerData, TablesCollector};
 use chrono::{DateTime, FixedOffset};
 use sea_orm::{DatabaseConnection, DbErr};
 use tokio::{
@@ -156,7 +156,7 @@ where
     fn should_refresh(&self) -> bool;
     fn try_recive_should_update(&mut self);
     fn try_resolve_query(&mut self) -> Option<Result<Vec<Value>, DbErr>>;
-    fn builder(&self) -> crate::container::ContainerBuilder;
+    fn builder(&self) -> ContainerBuilder;
 }
 
 impl<T, Value> ImplQueryCarrier<Value> for T
@@ -176,7 +176,7 @@ where
         self.ref_mut_query_carrier().try_resolve_query()
     }
 
-    fn builder(&self) -> crate::container::ContainerBuilder {
+    fn builder(&self) -> ContainerBuilder {
         self.ref_query_carrier().builder()
     }
 }

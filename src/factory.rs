@@ -1,7 +1,7 @@
 use sea_orm::DatabaseConnection;
 use tokio::sync::mpsc;
 
-use crate::{container::ContainerBuilder, messenger::ContainerData};
+use crate::{container::builder::ContainerBuilder, messenger::ContainerData};
 
 pub struct Factory {
     pool: DatabaseConnection,

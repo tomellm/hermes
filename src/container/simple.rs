@@ -1,13 +1,14 @@
 use sea_orm::EntityTrait;
 use tracing::error;
 
-use crate::carrier::{
-    execute::{ExecuteCarrier, HasExecuteCarrier},
-    query::ImplQueryCarrier,
-    simple_query::{HasSimpleQueryCarrier, SimpleQueryCarrier},
+use crate::{
+    carrier::{
+        execute::{ExecuteCarrier, HasExecuteCarrier},
+        query::ImplQueryCarrier,
+        simple_query::{HasSimpleQueryCarrier, SimpleQueryCarrier},
+    },
+    container::builder::ContainerBuilder,
 };
-
-use super::ContainerBuilder;
 
 pub struct Container<DbValue>
 where

@@ -1,15 +1,24 @@
 use std::collections::HashSet;
 
+#[cfg(any(feature = "psql", feature = "mysql", feature = "sqlite"))]
 use chrono::{DateTime, FixedOffset, Local};
+#[cfg(any(feature = "psql", feature = "mysql", feature = "sqlite"))]
 use sea_orm::{EntityTrait, QuerySelect, Select};
 
+#[cfg(any(feature = "psql", feature = "mysql", feature = "sqlite"))]
 use crate::consts::QUERY_BUILDER;
 
-pub mod actor;
-pub mod carrier;
-mod consts;
 pub mod container;
+
+#[cfg(any(feature = "psql", feature = "mysql", feature = "sqlite"))]
+pub mod actor;
+#[cfg(any(feature = "psql", feature = "mysql", feature = "sqlite"))]
+pub mod carrier;
+#[cfg(any(feature = "psql", feature = "mysql", feature = "sqlite"))]
+mod consts;
+#[cfg(any(feature = "psql", feature = "mysql", feature = "sqlite"))]
 pub mod factory;
+#[cfg(any(feature = "psql", feature = "mysql", feature = "sqlite"))]
 pub mod messenger;
 
 fn get_tables_present(all_tables: &[String], query: &str) -> Vec<String> {
@@ -19,10 +28,12 @@ fn get_tables_present(all_tables: &[String], query: &str) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
+#[cfg(any(feature = "psql", feature = "mysql", feature = "sqlite"))]
 pub trait ContainsTables {
     fn and_find_tables(self, collector: &mut TablesCollector) -> Self;
 }
 
+#[cfg(any(feature = "psql", feature = "mysql", feature = "sqlite"))]
 impl<T> ContainsTables for Select<T>
 where
     T: EntityTrait,
@@ -34,6 +45,7 @@ where
 }
 
 pub struct TablesCollector {
+    #[cfg(any(feature = "psql", feature = "mysql", feature = "sqlite"))]
     time_started: DateTime<FixedOffset>,
     all_tables: Vec<String>,
     tables: HashSet<String>,
@@ -42,6 +54,7 @@ pub struct TablesCollector {
 impl TablesCollector {
     pub fn new(all_tables: Vec<String>) -> Self {
         Self {
+            #[cfg(any(feature = "psql", feature = "mysql", feature = "sqlite"))]
             time_started: Local::now().into(),
             all_tables,
             tables: HashSet::new(),

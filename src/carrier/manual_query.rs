@@ -6,7 +6,7 @@ use tokio::{
     task,
 };
 
-use crate::{container::ContainerBuilder, messenger::ContainerData, TablesCollector};
+use crate::{container::builder::ContainerBuilder, messenger::ContainerData, TablesCollector};
 
 use super::query::{ExecutedQuery, HasQueryCarrier, ImplQueryCarrier, QueryCarrier};
 

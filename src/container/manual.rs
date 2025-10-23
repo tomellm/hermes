@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
-use crate::carrier::{
-    execute::{ExecuteCarrier, HasExecuteCarrier},
-    manual_query::{HasManualQueryCarrier, ImplManualQueryCarrier, ManualQueryCarrier},
-    query::ImplQueryCarrier,
+use crate::{
+    carrier::{
+        execute::{ExecuteCarrier, HasExecuteCarrier},
+        manual_query::{HasManualQueryCarrier, ImplManualQueryCarrier, ManualQueryCarrier},
+        query::ImplQueryCarrier,
+    },
+    container::builder::ContainerBuilder,
 };
 
 use tracing::error;
 
-use super::{
-    data::{Data, HasData},
-    ContainerBuilder,
-};
+use super::data::{Data, HasData};
 
 pub(crate) type StoredQuery<Value> =
     Option<Arc<dyn Fn(&mut Container<Value>) + Sync + Send + 'static>>;

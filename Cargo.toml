@@ -7,16 +7,17 @@ edition = "2021"
 tokio = { version = "1.48.0", features = ["rt", "sync"], default-features = false }
 tracing = { version =  "0.1.41", default-features = false }
 permutation = "0.4.1"
-sea-query = { version = "0.32.7", features = ["thread-safe", "with-chrono", "with-uuid"]}
-sea-orm = { version = "1.1.17" }
-chrono = { version = "0.4.42", default-features = false }
+sea-query = { version = "0.32.7", features = ["thread-safe", "with-chrono", "with-uuid"], optional = true}
+sea-orm = { version = "1.1.17", optional = true }
+chrono = { version = "0.4.42", features = ["clock"], default-features = false }
 lazy_static = "1.5.0"
 
 [features]
 default = [
-    "psql"
 ]
 psql = [
+    "dep:sea-orm",
+    "dep:sea-query",
     "sea-orm/sqlx-postgres",
     "sea-orm/postgres-array",
     "sea-orm/postgres-array",
@@ -28,10 +29,14 @@ psql = [
     "sea-query/postgres-vector"
 ]
 mysql = [
+    "dep:sea-orm",
+    "dep:sea-query",
     "sea-orm/sqlx-mysql",
     "sea-query/backend-mysql"
 ]
 sqlite = [
+    "dep:sea-orm",
+    "dep:sea-query",
     "sea-orm/sqlx-sqlite",
     "sea-query/backend-sqlite"
 ]

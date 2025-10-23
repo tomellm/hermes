@@ -9,13 +9,11 @@ use crate::{
         query::ImplQueryCarrier,
         simple_query::{HasSimpleQueryCarrier, ImplSimpleQueryCarrier, SimpleQueryCarrier},
     },
+    container::builder::ContainerBuilder,
     FromEntity, ToEntity,
 };
 
-use super::{
-    data::{Data, HasData},
-    ContainerBuilder,
-};
+use super::data::{Data, HasData};
 
 pub struct ProjectingContainer<Value, DbValue>
 where

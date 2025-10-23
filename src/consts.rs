@@ -1,11 +1,16 @@
 use sea_orm::DbBackend;
-use sea_query::{MysqlQueryBuilder, PostgresQueryBuilder, SqliteQueryBuilder};
+#[cfg(feature = "mysql")]
+use sea_query::MysqlQueryBuilder;
+#[cfg(feature = "psql")]
+use sea_query::PostgresQueryBuilder;
+#[cfg(feature = "sqlite")]
+use sea_query::SqliteQueryBuilder;
 
 #[cfg(all(feature = "psql", not(feature = "mysql"), not(feature = "sqlite")))]
 pub(crate) const DB_BACKEND: DbBackend = DbBackend::Postgres;
 
 #[cfg(all(feature = "mysql", not(feature = "psql"), not(feature = "sqlite")))]
-pub(crate) const DB_BACKEND: DbBackend = DbBackend::Mysql;
+pub(crate) const DB_BACKEND: DbBackend = DbBackend::MySql;
 
 #[cfg(all(feature = "sqlite", not(feature = "mysql"), not(feature = "psql")))]
 pub(crate) const DB_BACKEND: DbBackend = DbBackend::Sqlite;
