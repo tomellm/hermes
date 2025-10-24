@@ -1,9 +1,10 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, fmt::Debug};
 
 #[cfg(any(feature = "psql", feature = "mysql", feature = "sqlite"))]
 use chrono::{DateTime, FixedOffset, Local};
 #[cfg(any(feature = "psql", feature = "mysql", feature = "sqlite"))]
 use sea_orm::{EntityTrait, QuerySelect, Select};
+use tracing::error;
 
 #[cfg(any(feature = "psql", feature = "mysql", feature = "sqlite"))]
 use crate::consts::QUERY_BUILDER;
@@ -100,4 +101,27 @@ where
     Entity: ?Sized,
 {
     fn from_entity(entity: Entity) -> Self;
+}
+
+pub(crate) trait LogDebugErr {
+    fn log_err(self);
+}
+
+pub(crate) trait LogErr {
+    fn log_msg(self, msg: &str);
+}
+
+impl<T, E> LogDebugErr for Result<T, E>
+where
+    E: Debug,
+{
+    fn log_err(self) {
+        let _ = self.map_err(|err| error!("error: {err:?}"));
+    }
+}
+
+impl<T, E> LogErr for Result<T, E> {
+    fn log_msg(self, msg: &str) {
+        let _ = self.map_err(|_| error!(msg));
+    }
 }

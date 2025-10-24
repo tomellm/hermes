@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1.48.0", features = ["rt", "sync"], default-features = false }
+tokio = { version = "1.48.0", features = ["rt", "sync", "macros", "time"], default-features = false }
+tokio-macros = { version = "0.2.0-alpha.6" }
 tracing = { version =  "0.1.41", default-features = false }
 permutation = "0.4.1"
 sea-query = { version = "0.32.7", features = ["thread-safe", "with-chrono", "with-uuid"], optional = true}
